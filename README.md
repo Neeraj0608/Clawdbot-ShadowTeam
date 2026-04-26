@@ -1,4 +1,4 @@
-# Clawdbot-ShadowTeam
+# Clawdbot
 
 > Autonomous AI agent system for real-time communication, lead qualification, and web intelligence.
 
@@ -6,7 +6,7 @@
 
 ## 🚀 Overview
 
-Clawdbot-ShadowTeam is an agentic automation system designed to transform how businesses interact, qualify leads, and extract actionable insights from the web.
+Clawdbot is an agentic automation system designed to transform how businesses interact, qualify leads, and extract actionable insights from the web.
 
 Instead of relying on static chatbots or manual workflows, this system leverages **autonomous AI agents** that can communicate, decide, and execute tasks in real time.
 
