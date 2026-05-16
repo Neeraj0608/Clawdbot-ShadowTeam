@@ -1,0 +1,1302 @@
+"use client";
+
+import Link from 'next/link';
+import { useEffect, useState, type ReactNode } from 'react';
+import { trackEvent } from '@/lib/analytics';
+import { usePathname } from "next/navigation";
+import { useToast } from "@/components/ToastProvider";
+
+const descriptionUrlRegex = /((https?:\/\/|www\.)[^\s<>"]+)/gi;
+
+const renderTextWithClickableLinks = (text: string): ReactNode[] => {
+  const nodes: ReactNode[] = [];
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(descriptionUrlRegex)) {
+    const matchedUrl = match[0];
+    const startIndex = match.index ?? 0;
+
+    if (startIndex > lastIndex) {
+      nodes.push(text.slice(lastIndex, startIndex));
+    }
+
+    const href = matchedUrl.startsWith('http://') || matchedUrl.startsWith('https://')
+      ? matchedUrl
+      : `https://${matchedUrl}`;
+
+    nodes.push(
+      <a
+        key={`desc-link-${startIndex}-${matchedUrl}`}
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="underline text-[#002155] font-semibold break-all"
+      >
+        {matchedUrl}
+      </a>
+    );
+
+    lastIndex = startIndex + matchedUrl.length;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(text.slice(lastIndex));
+  }
+
+  return nodes;
+};
+
+type ProblemLite = {
+  id: number;
+  title: string;
+  description: string;
+  isIndustryProblem: boolean;
+  industryName: string | null;
+  supportDocumentUrl: string | null;
+  mode: string;
+  status: string;
+};
+
+type LeaderboardRow = {
+  rank: number;
+  teamName: string;
+  problemTitle: string;
+  score: number;
+  updatedAt: string;
+  members: { id: number; name: string; email: string; role: string }[];
+};
+
+type UidLookupRow = {
+  uid: string;
+  found: boolean;
+  eligible: boolean;
+  alreadyParticipated: boolean;
+  reason: string;
+  name: string | null;
+  email: string | null;
+  role: string | null;
+  status: string | null;
+  isVerified: boolean | null;
+};
+
+type ExistingRegistrationSummary = {
+  claimId: number;
+  teamName: string;
+  problem: {
+    id: number;
+    title: string;
+  };
+  teamLeader: {
+    id: number;
+    name: string;
+    email: string;
+    uid: string | null;
+  } | null;
+  members: Array<{
+    role: string;
+    user: {
+      id: number;
+      name: string;
+      email: string;
+      uid: string | null;
+    };
+  }>;
+  submissionFileUrl: string | null;
+  submittedAt: string;
+  createdAt: string;
+};
+
+type ViewerInterestSummary = {
+  id: number;
+  hasDetails: boolean;
+  teamName: string | null;
+  teamSize: number | null;
+};
+
+type SessionDocumentRow = {
+  id: number;
+  session: number;
+  documentUrl: string | null;
+  uploadedAt: string;
+  uploadedByUserId: number;
+  documentFileUrl: string | null;
+};
+
+type SessionDocumentResponse = {
+  claimId: number;
+  teamName: string | null;
+  status: string;
+  event: {
+    id: number;
+    title: string;
+    status: 'UPCOMING' | 'ACTIVE' | 'JUDGING' | 'CLOSED';
+    totalSessions: number;
+    uploadableSessions: number[];
+    sessionUploadLocks: Array<{
+      session: number;
+      isOpen: boolean;
+      updatedAt: string;
+    }>;
+  };
+  sessionDocuments: SessionDocumentRow[];
+  summary: {
+    requiredCount: number;
+    uploadedCount: number;
+    missingSessions: number[];
+  };
+};
+
+type InnovationEventClientProps = {
+  eventId: number;
+  title: string;
+  description: string | null;
+  status: 'UPCOMING' | 'ACTIVE' | 'JUDGING' | 'CLOSED';
+  registrationOpen: boolean;
+  startTimeISO: string;
+  endTimeISO: string;
+  submissionLockISO: string | null;
+  registrationCloseISO: string;
+  eventBriefUrl: string | null;
+  problems: ProblemLite[];
+  viewerRole: 'STUDENT' | 'FACULTY' | 'ADMIN' | null;
+  initialRegistration: ExistingRegistrationSummary | null;
+  initialInterest: ViewerInterestSummary | null;
+};
+
+const formatIstDateTime = (value: string) => {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "Invalid date";
+  return parsed.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+};
+
+export default function InnovationEventClient({
+  eventId,
+  title,
+  description,
+  status,
+  registrationOpen,
+  startTimeISO,
+  endTimeISO,
+  submissionLockISO,
+  registrationCloseISO,
+  eventBriefUrl,
+  problems,
+  viewerRole,
+  initialRegistration,
+  initialInterest,
+}: InnovationEventClientProps) {
+  const [selectedProblem, setSelectedProblem] = useState<ProblemLite | null>(null);
+  const [selectedProblemIndex, setSelectedProblemIndex] = useState<number | null>(null);
+  const [teamName, setTeamName] = useState('');
+  const [teamSize, setTeamSize] = useState(1);
+  const [teamLeadUid, setTeamLeadUid] = useState('');
+  const [memberUids, setMemberUids] = useState<string[]>([]);
+  const [problemId, setProblemId] = useState<number>(problems[0]?.id ?? 0);
+  const [pptFile, setPptFile] = useState<File | null>(null);
+  const pathname = usePathname();
+  const { pushToast } = useToast();
+
+  const [statusMessage, setStatusMessage] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [uidLookupBusy, setUidLookupBusy] = useState(false);
+  const [uidLookupMessage, setUidLookupMessage] = useState('');
+  const [uidLookupRows, setUidLookupRows] = useState<UidLookupRow[]>([]);
+  const [verifiedUidSnapshot, setVerifiedUidSnapshot] = useState('');
+  const [registrationSummary, setRegistrationSummary] = useState<ExistingRegistrationSummary | null>(initialRegistration);
+  const [interestRecord, setInterestRecord] = useState<ViewerInterestSummary | null>(initialInterest);
+  const [interestBusy, setInterestBusy] = useState(false);
+  const [interestDetailsBusy, setInterestDetailsBusy] = useState(false);
+  const [interestTeamName, setInterestTeamName] = useState(initialInterest?.teamName || '');
+  const [interestTeamSize, setInterestTeamSize] = useState<number>(initialInterest?.teamSize ?? 1);
+
+  const [leaderboard, setLeaderboard] = useState<LeaderboardRow[]>([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  const [sessionDocumentData, setSessionDocumentData] = useState<SessionDocumentResponse | null>(null);
+  const [sessionDocumentLoading, setSessionDocumentLoading] = useState(false);
+  const [sessionDocumentUploadBusySession, setSessionDocumentUploadBusySession] = useState<number | null>(null);
+  const [sessionDocumentFiles, setSessionDocumentFiles] = useState<Record<number, File | null>>({});
+
+  const trackSafe = (eventName: string, params?: Record<string, string | number | boolean>) => {
+    try {
+      trackEvent(eventName, params);
+    } catch {
+      // analytics must never break UI flow
+    }
+  };
+
+  useEffect(() => {
+    if (status !== 'CLOSED') return;
+
+    const loadLeaderboard = async () => {
+      setLeaderboardLoading(true);
+      try {
+        const res = await fetch(`/api/innovation/events/${eventId}/leaderboard`);
+        const payload = (await res.json()) as { success: boolean; message: string; data: LeaderboardRow[] };
+        if (!res.ok || !payload.success) throw new Error(payload.message || 'Failed to load leaderboard');
+        setLeaderboard(payload.data);
+      } catch (err) {
+        setErrorMessage(err instanceof Error ? err.message : 'Could not load leaderboard');
+      } finally {
+        setLeaderboardLoading(false);
+      }
+    };
+
+    void loadLeaderboard();
+  }, [eventId, status]);
+
+  useEffect(() => {
+    if (!registrationSummary?.claimId || viewerRole !== 'STUDENT') {
+      setSessionDocumentData(null);
+      return;
+    }
+
+    const loadSessionDocumentData = async () => {
+      setSessionDocumentLoading(true);
+
+      try {
+        const res = await fetch(`/api/innovation/claims/${registrationSummary.claimId}/session-documents`, {
+          credentials: 'include',
+        });
+
+        const payload = (await res.json()) as {
+          success: boolean;
+          message: string;
+          data: SessionDocumentResponse;
+        };
+
+        if (!res.ok || !payload.success) {
+          throw new Error(payload.message || 'Could not load session documents');
+        }
+
+        setSessionDocumentData(payload.data);
+      } catch (err) {
+        setSessionDocumentData(null);
+        setErrorMessage(err instanceof Error ? err.message : 'Could not load session documents');
+      } finally {
+        setSessionDocumentLoading(false);
+      }
+    };
+
+    void loadSessionDocumentData();
+  }, [registrationSummary?.claimId, viewerRole]);
+
+  useEffect(() => {
+    const memberCount = Math.max(teamSize - 1, 0);
+    setMemberUids((prev) => {
+      if (prev.length === memberCount) return prev;
+      if (prev.length > memberCount) return prev.slice(0, memberCount);
+      return [...prev, ...Array.from({ length: memberCount - prev.length }, () => '')];
+    });
+  }, [teamSize]);
+
+  useEffect(() => {
+    setVerifiedUidSnapshot('');
+    setUidLookupRows([]);
+    setUidLookupMessage('');
+  }, [teamLeadUid, memberUids, teamSize, problemId]);
+
+  const getNormalizedUidInputs = () => {
+    const cleanedLeadUid = teamLeadUid.trim().toUpperCase();
+    const cleanedMemberUids = memberUids.map((uid) => uid.trim().toUpperCase());
+    const snapshot = JSON.stringify([cleanedLeadUid, ...cleanedMemberUids]);
+
+    return {
+      cleanedLeadUid,
+      cleanedMemberUids,
+      snapshot,
+    };
+  };
+
+  useEffect(() => {
+    if (!selectedProblem) return;
+
+    const scrollY = window.scrollY;
+
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${scrollY}px`;
+    document.body.style.left = "0";
+    document.body.style.right = "0";
+    document.body.style.width = "100%";
+
+    return () => {
+      const y = document.body.style.top;
+
+      document.body.style.position = "";
+      document.body.style.top = "";
+      document.body.style.left = "";
+      document.body.style.right = "";
+      document.body.style.width = "";
+
+      if (y) {
+        window.scrollTo(0, parseInt(y || "0") * -1);
+      }
+    };
+  }, [selectedProblem]);
+
+  const validateUidInputs = (cleanedLeadUid: string, cleanedMemberUids: string[]) => {
+    if (!cleanedLeadUid || cleanedMemberUids.some((uid) => !uid)) {
+      return 'Please fill all required UID fields.';
+    }
+
+    if (teamSize !== cleanedMemberUids.length + 1) {
+      return 'Team size must match team lead plus member UID fields.';
+    }
+
+    if (new Set(cleanedMemberUids).size !== cleanedMemberUids.length) {
+      return 'Member UIDs must be unique.';
+    }
+
+    if (cleanedMemberUids.includes(cleanedLeadUid)) {
+      return 'Team lead UID cannot be repeated in member UID fields.';
+    }
+
+    return null;
+  };
+
+  const mapHackathonFailureReason = (message: string) => {
+    if (message.includes('required UID fields')) return 'validation_required_uid_fields';
+    if (message.includes('Team size')) return 'validation_team_size_mismatch';
+    if (message.includes('unique')) return 'validation_duplicate_member_uid';
+    if (message.includes('repeated')) return 'validation_repeated_team_lead_uid';
+    if (message.includes('verify UID details')) return 'validation_uid_verification_required';
+    if (message.includes('not eligible')) return 'validation_non_eligible_uid';
+    if (message.includes('upload a PPT/PDF')) return 'validation_missing_presentation';
+    return 'server_error';
+  };
+
+  const handleFetchUidDetails = async () => {
+    setErrorMessage('');
+    setStatusMessage('');
+    setUidLookupMessage('');
+
+    const { cleanedLeadUid, cleanedMemberUids, snapshot } = getNormalizedUidInputs();
+    const validationError = validateUidInputs(cleanedLeadUid, cleanedMemberUids);
+    if (validationError) {
+      setErrorMessage(validationError);
+      pushToast(validationError, "error");
+      return;
+    }
+
+    const requestedUids = [cleanedLeadUid, ...cleanedMemberUids];
+
+    setUidLookupBusy(true);
+    try {
+      const res = await fetch(
+        `/api/innovation/users/lookup?uids=${encodeURIComponent(JSON.stringify(requestedUids))}&eventId=${eventId}&problemId=${problemId}`,
+        {
+          method: 'GET',
+          credentials: 'include',
+        }
+      );
+
+      const payload = (await res.json()) as {
+        success: boolean;
+        message: string;
+        data: UidLookupRow[];
+      };
+
+      if (!res.ok || !payload.success) {
+        throw new Error(payload.message || 'Failed to fetch UID details');
+      }
+
+      setUidLookupRows(payload.data);
+
+      const hasIneligible = payload.data.some((row) => !row.eligible);
+      if (hasIneligible) {
+        setVerifiedUidSnapshot('');
+        setUidLookupMessage('Some UIDs are non-eligible. Check the detailed reason below and update before submitting.');
+        return;
+      }
+
+      setVerifiedUidSnapshot(snapshot);
+      setUidLookupMessage('UID details fetched and verified. You can now submit registration.');
+      pushToast("UIDs verified successfully!", "success");
+    } catch (err) {
+      setUidLookupRows([]);
+      setVerifiedUidSnapshot('');
+      const message = err instanceof Error ? err.message : 'Failed to fetch UID details';
+      setErrorMessage(message);
+      pushToast(message, "error");
+    } finally {
+      setUidLookupBusy(false);
+    }
+  };
+
+  const registrationClosed = !registrationOpen || status === 'CLOSED' || new Date() > new Date(registrationCloseISO);
+  const canShowRegistrationForm =
+    viewerRole === 'STUDENT' &&
+    !registrationClosed &&
+    problems.length > 0 &&
+    !registrationSummary;
+  const isInterested = Boolean(interestRecord);
+
+  const getRankVisual = (rank: number) => {
+    if (rank === 1) {
+      return {
+        icon: 'workspace_premium',
+        pill: 'bg-[#fff3c4] text-[#7a5300] border border-[#f2cd6b]',
+        row: 'bg-[linear-gradient(90deg,#fff8dc,transparent)]',
+      };
+    }
+    if (rank === 2) {
+      return {
+        icon: 'military_tech',
+        pill: 'bg-[#eef2f7] text-[#455066] border border-[#d4dbe7]',
+        row: 'bg-[linear-gradient(90deg,#f5f7fb,transparent)]',
+      };
+    }
+    if (rank === 3) {
+      return {
+        icon: 'award_star',
+        pill: 'bg-[#fbe9dd] text-[#7a3f00] border border-[#f0c7a4]',
+        row: 'bg-[linear-gradient(90deg,#fff2e9,transparent)]',
+      };
+    }
+    return {
+      icon: 'emoji_events',
+      pill: 'bg-[#f6f6f6] text-[#434651] border border-[#e3e2df]',
+      row: '',
+    };
+  };
+
+  const parseInterestRecord = (value: unknown): ViewerInterestSummary | null => {
+    if (!value || typeof value !== 'object') return null;
+
+    const payload = value as {
+      id?: unknown;
+      hasDetails?: unknown;
+      teamName?: unknown;
+      teamSize?: unknown;
+    };
+
+    if (typeof payload.id !== 'number' || typeof payload.hasDetails !== 'boolean') return null;
+
+    return {
+      id: payload.id,
+      hasDetails: payload.hasDetails,
+      teamName: typeof payload.teamName === 'string' ? payload.teamName : null,
+      teamSize: typeof payload.teamSize === 'number' ? payload.teamSize : null,
+    };
+  };
+
+  const handleMarkInterested = async () => {
+    if (viewerRole !== 'STUDENT' || interestBusy || isInterested) return;
+
+    setErrorMessage('');
+    setStatusMessage('');
+    setInterestBusy(true);
+
+    try {
+      const res = await fetch('/api/innovation/interest', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ eventId }),
+      });
+
+      const payload = (await res.json()) as {
+        success: boolean;
+        message: string;
+        data?: {
+          created?: boolean;
+          interest?: unknown;
+        };
+      };
+
+      if (!res.ok || !payload.success) {
+        throw new Error(payload.message || 'Could not mark interest');
+      }
+
+      const nextInterest = parseInterestRecord(payload?.data?.interest);
+      if (nextInterest) {
+        setInterestRecord(nextInterest);
+        setInterestTeamName(nextInterest.teamName || '');
+        setInterestTeamSize(nextInterest.teamSize ?? 1);
+      }
+
+      setStatusMessage(payload.message || "You're marked as interested.");
+      pushToast("You're marked as interested", 'success');
+      trackSafe('hackathon_interest_marked', {
+        event_id: String(eventId),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not mark interest';
+      setErrorMessage(message);
+      pushToast(message, 'error');
+      trackSafe('hackathon_interest_mark_failed', {
+        event_id: String(eventId),
+      });
+    } finally {
+      setInterestBusy(false);
+    }
+  };
+
+  const handleSaveInterestDetails = async (event: React.FormEvent) => {
+    event.preventDefault();
+
+    if (viewerRole !== 'STUDENT' || !interestRecord) return;
+
+    setErrorMessage('');
+    setStatusMessage('');
+    setInterestDetailsBusy(true);
+
+    try {
+      const res = await fetch('/api/innovation/interest', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          eventId,
+          teamName: interestTeamName,
+          teamSize: interestTeamSize,
+        }),
+      });
+
+      const payload = (await res.json()) as {
+        success: boolean;
+        message: string;
+        data?: {
+          interest?: unknown;
+        };
+      };
+
+      if (!res.ok || !payload.success) {
+        throw new Error(payload.message || 'Could not save interest details');
+      }
+
+      const nextInterest = parseInterestRecord(payload?.data?.interest);
+
+      if (nextInterest) {
+        setInterestRecord(nextInterest);
+        setInterestTeamName(nextInterest.teamName || '');
+        setInterestTeamSize(nextInterest.teamSize ?? 1);
+      }
+
+      setStatusMessage(payload.message || 'Optional team details saved.');
+      pushToast('Optional team details saved', 'success');
+      trackSafe('hackathon_interest_details_saved', {
+        event_id: String(eventId),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Could not save team details';
+      setErrorMessage(message);
+      pushToast(message, 'error');
+      trackSafe('hackathon_interest_details_failed', {
+        event_id: String(eventId),
+      });
+    } finally {
+      setInterestDetailsBusy(false);
+    }
+  };
+
+  const handleRegister = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setErrorMessage('');
+    setStatusMessage('');
+
+    const { cleanedLeadUid, cleanedMemberUids, snapshot } = getNormalizedUidInputs();
+
+    const validationError = validateUidInputs(cleanedLeadUid, cleanedMemberUids);
+    if (validationError) {
+      setErrorMessage(validationError);
+      pushToast(validationError, "error");
+      trackSafe('innovation_registration_failed', {
+        track: 'hackathon',
+        reason: mapHackathonFailureReason(validationError),
+      });
+      return;
+    }
+
+    if (verifiedUidSnapshot !== snapshot) {
+      const msg = 'Please fetch and verify UID details first before submitting registration.';
+      setErrorMessage(msg);
+      pushToast(msg, "error");
+      trackSafe('innovation_registration_failed', {
+        track: 'hackathon',
+        reason: mapHackathonFailureReason('Please fetch and verify UID details first before submitting registration.'),
+      });
+      return;
+    }
+
+    if (uidLookupRows.some((row) => !row.eligible)) {
+      const msg = 'One or more UIDs are not eligible. Please correct them and fetch details again.';
+      setErrorMessage(msg);
+      pushToast(msg, "error");
+      trackSafe('innovation_registration_failed', {
+        track: 'hackathon',
+        reason: mapHackathonFailureReason('One or more UIDs are not eligible. Please correct them and fetch details again.'),
+      });
+      return;
+    }
+
+    if (!pptFile) {
+      const msg = 'Please upload a PPT/PDF file.';
+      setErrorMessage(msg);
+      pushToast(msg, "error");
+      trackSafe('innovation_registration_failed', {
+        track: 'hackathon',
+        reason: mapHackathonFailureReason('Please upload a PPT/PDF file.'),
+      });
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const formData = new FormData();
+      formData.set('teamName', teamName);
+      formData.set('teamSize', String(teamSize));
+      formData.set('teamLeadUid', cleanedLeadUid);
+      formData.set('problemId', String(problemId));
+      formData.set('memberUids', JSON.stringify(cleanedMemberUids));
+      formData.set('pptFile', pptFile);
+
+      const res = await fetch(`/api/innovation/events/${eventId}/register`, {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+      });
+
+      const payload = (await res.json()) as {
+        success: boolean;
+        message: string;
+        data?: {
+          claimId?: number;
+          registration?: ExistingRegistrationSummary;
+        } | ExistingRegistrationSummary | null;
+      };
+
+      const dataObject = payload?.data ?? null;
+      const registrationFromData =
+        dataObject && typeof dataObject === 'object' && 'registration' in dataObject
+          ? (dataObject.registration as ExistingRegistrationSummary | null)
+          : (dataObject as ExistingRegistrationSummary | null);
+
+      if (!res.ok || !payload.success) {
+        if (registrationFromData?.claimId) {
+          setRegistrationSummary(registrationFromData);
+          setStatusMessage('You are already registered for this event. Team details are shown below.');
+          setErrorMessage('');
+          pushToast('Already registered for this event.', 'success');
+          return;
+        }
+
+        throw new Error(payload.message || 'Registration failed');
+      }
+
+      if (registrationFromData?.claimId) {
+        setRegistrationSummary(registrationFromData);
+      }
+
+      trackSafe('hackathon_register', {
+        event_id: String(eventId),
+        event_name: title,
+        team_size: teamSize,
+      });
+
+      setStatusMessage('Team registered successfully. Your registration details are shown below.');
+      pushToast("Team registered successfully!", "success");
+      setTeamName('');
+      setTeamSize(1);
+      setTeamLeadUid('');
+      setMemberUids([]);
+      setPptFile(null);
+      setUidLookupRows([]);
+      setUidLookupMessage('');
+      setVerifiedUidSnapshot('');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Registration failed';
+      setErrorMessage(message);
+      pushToast(message, "error");
+      trackSafe('innovation_registration_failed', {
+        track: 'hackathon',
+        reason: mapHackathonFailureReason(message),
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSessionDocumentUpload = async (session: number) => {
+    if (!registrationSummary?.claimId) return;
+
+    const file = sessionDocumentFiles[session] || null;
+    if (!file) {
+      const message = `Please select a file for Session ${session}.`;
+      setErrorMessage(message);
+      pushToast(message, 'error');
+      return;
+    }
+
+    setSessionDocumentUploadBusySession(session);
+    setErrorMessage('');
+    setStatusMessage('');
+
+    try {
+      const formData = new FormData();
+      formData.set('session', String(session));
+      formData.set('file', file);
+
+      const res = await fetch(`/api/innovation/claims/${registrationSummary.claimId}/session-documents`, {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+      });
+
+      const payload = (await res.json()) as {
+        success: boolean;
+        message: string;
+      };
+
+      if (!res.ok || !payload.success) {
+        throw new Error(payload.message || `Could not upload Session ${session} document`);
+      }
+
+      setSessionDocumentFiles((prev) => ({
+        ...prev,
+        [session]: null,
+      }));
+
+      setStatusMessage(payload.message || `Session ${session} document uploaded successfully.`);
+      pushToast(`Session ${session} document uploaded`, 'success');
+
+      const refreshRes = await fetch(`/api/innovation/claims/${registrationSummary.claimId}/session-documents`, {
+        credentials: 'include',
+      });
+      const refreshPayload = (await refreshRes.json()) as {
+        success: boolean;
+        message: string;
+        data: SessionDocumentResponse;
+      };
+
+      if (refreshRes.ok && refreshPayload.success) {
+        setSessionDocumentData(refreshPayload.data);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : `Could not upload Session ${session} document`;
+      setErrorMessage(message);
+      pushToast(message, 'error');
+    } finally {
+      setSessionDocumentUploadBusySession(null);
+    }
+  };
+
+  return (
+    <>
+      {statusMessage ? <p className="mb-4 border border-green-300 bg-green-50 text-green-800 px-4 py-3 text-sm">{statusMessage}</p> : null}
+      {errorMessage ? <p className="mb-4 border border-red-300 bg-red-50 text-red-700 px-4 py-3 text-sm">{errorMessage}</p> : null}
+
+      <section className="mb-6 flex flex-wrap gap-3">
+        <Link
+          href="/innovation"
+          className={`px-4 py-2 text-xs font-bold uppercase tracking-wider ${pathname === "/innovation"
+            ? "bg-[#002155] text-white"
+            : "border border-[#002155] text-[#002155]"
+            }`}
+        >
+          Innovation Home
+        </Link>
+
+        <Link
+          href="/innovation/problems"
+          className={`px-4 py-2 text-xs font-bold uppercase tracking-wider ${pathname === "/innovation/problems"
+            ? "bg-[#0b6b2e] text-white"
+            : "border border-[#0b6b2e] text-[#0b6b2e]"
+            }`}
+        >
+          Open Problem Statements
+        </Link>
+
+        {viewerRole === "STUDENT" && (
+          <Link
+            href="/innovation/my-submissions"
+            className={`px-4 py-2 text-xs font-bold uppercase tracking-wider ${pathname === "/innovation/my-submissions"
+              ? "bg-[#8c4f00] text-white"
+              : "border border-[#8c4f00] text-[#8c4f00]"
+              }`}
+          >
+            My Submissions
+          </Link>
+        )}
+      </section>
+
+      <section className="mb-8 border border-[#c4c6d3] bg-white p-5">
+        <p className="text-xs uppercase tracking-widest text-[#8c4f00]">{status}</p>
+        <h2 className="text-2xl font-headline text-[#002155] mt-1">{title}</h2>
+        {description ? <p className="mt-2 text-sm text-[#434651] whitespace-pre-wrap break-words">{renderTextWithClickableLinks(description)}</p> : null}
+        <p className="mt-2 text-xs text-[#434651]">Starts: {formatIstDateTime(startTimeISO)}</p>
+        <p className="mt-1 text-xs text-[#434651]">Ends: {formatIstDateTime(endTimeISO)}</p>
+        <p className="mt-1 text-xs text-[#434651]">
+          Submission lock: {submissionLockISO ? formatIstDateTime(submissionLockISO) : 'Not set'}
+        </p>
+        <p className="mt-1 text-xs text-[#434651]">Registration closes: {formatIstDateTime(registrationCloseISO)}</p>
+        <p className="mt-1 text-xs text-[#434651]">Registration status: {registrationOpen ? 'OPEN' : 'CLOSED'}</p>
+        {eventBriefUrl ? (
+          <a href={eventBriefUrl} target="_blank" rel="noreferrer" className="inline-flex mt-3 text-xs font-bold uppercase tracking-wider text-[#8c4f00] underline">
+            Open Event Brief (PPT/PDF)
+          </a>
+        ) : null}
+      </section>
+
+      <section className="mb-8 border border-[#c4c6d3] bg-white p-5">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <h3 className="font-headline text-2xl text-[#002155]">Show Interest</h3>
+
+          {viewerRole === 'STUDENT' ? (
+            <button
+              type="button"
+              onClick={() => void handleMarkInterested()}
+              disabled={interestBusy || isInterested}
+              className="bg-[#002155] text-white px-4 py-3 text-xs font-bold uppercase tracking-wider disabled:opacity-60"
+            >
+              {interestBusy ? 'Saving...' : isInterested ? "You're Interested" : "I'm Interested"}
+            </button>
+          ) : viewerRole === null ? (
+            <Link
+              href={`/login?next=${encodeURIComponent(`/innovation/events/${eventId}`)}`}
+              className="border border-[#002155] text-[#002155] px-4 py-3 text-xs font-bold uppercase tracking-wider"
+            >
+              Login To Mark Interest
+            </Link>
+          ) : (
+            <p className="text-xs text-[#434651]">Only student accounts can mark interest.</p>
+          )}
+        </div>
+
+        {isInterested ? (
+          <div className="mt-4 border border-[#e3e2df] bg-[#faf9f5] p-4">
+            <p className="text-xs font-bold uppercase tracking-wider text-[#002155]">Add Team Details (Optional)</p>
+            <p className="mt-1 text-xs text-[#434651]">
+              This does not register your team. It only shares early planning details.
+            </p>
+            <p className="mt-1 text-xs text-[#8c4f00]">
+              {interestRecord?.hasDetails
+                ? 'You already added details. You can update them below.'
+                : 'Optional details are currently missing for your interest record.'}
+            </p>
+
+            <form className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3" onSubmit={handleSaveInterestDetails}>
+              <input
+                value={interestTeamName}
+                onChange={(e) => setInterestTeamName(e.target.value)}
+                className="border border-[#c4c6d3] px-3 py-2 text-sm md:col-span-2"
+                placeholder="Team name (optional)"
+              />
+              <select
+                value={interestTeamSize}
+                onChange={(e) => setInterestTeamSize(Number(e.target.value))}
+                className="border border-[#c4c6d3] px-3 py-2 text-sm"
+              >
+                <option value={1}>1</option>
+                <option value={2}>2</option>
+                <option value={3}>3</option>
+                <option value={4}>4</option>
+                <option value={5}>5</option>
+              </select>
+              <button
+                type="submit"
+                disabled={interestDetailsBusy}
+                className="bg-[#0b6b2e] text-white px-4 py-2 text-xs font-bold uppercase tracking-wider md:w-fit disabled:opacity-60"
+              >
+                {interestDetailsBusy
+                  ? 'Saving...'
+                  : interestRecord?.hasDetails
+                    ? 'Update Optional Details'
+                    : 'Save Optional Details'}
+              </button>
+            </form>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="mb-8">
+        <h3 className="font-headline text-2xl text-[#002155] mb-4">Event Problems</h3>
+        {problems.length === 0 ? (
+          <p className="border border-dashed border-[#c4c6d3] bg-white p-6 text-[#434651]">No problems linked to this event yet.</p>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {problems.map((problem, index) => (
+              <button
+                key={problem.id}
+                type="button"
+                onClick={() => {
+                  setSelectedProblem(problem);
+                  setSelectedProblemIndex(index);
+                }}
+                className={`p-4 text-left focus:outline-none focus:ring-2 focus:ring-[#002155] ${
+                  problem.isIndustryProblem
+                    ? 'border border-[#b77a2f] bg-gradient-to-br from-[#fff9ec] via-[#fff5e0] to-[#fdf0d0] shadow-[0_8px_20px_rgba(183,122,47,0.14)] hover:border-[#8c4f00] hover:shadow-[0_12px_24px_rgba(183,122,47,0.2)]'
+                    : 'border border-[#c4c6d3] bg-white hover:border-[#002155]'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <p className="text-xs uppercase tracking-widest text-[#8c4f00]">PROBLEM STATEMENT {index + 1}</p>
+                </div>
+                <p className="mt-1 text-sm font-bold text-[#002155]">{problem.title}</p>
+                <p className="mt-1 text-xs text-[#434651]">
+                  Type: {problem.isIndustryProblem ? `Industry${problem.industryName ? ` (${problem.industryName})` : ''}` : 'Normal'}
+                </p>
+                {problem.isIndustryProblem && problem.industryName ? (
+                  <p className="mt-2 text-[11px] font-bold uppercase tracking-wider text-[#8c4f00]">
+                    {problem.industryName} x TCET Collaboration
+                  </p>
+                ) : null}
+                {problem.supportDocumentUrl ? (
+                  <p className="mt-1 text-[11px] font-semibold uppercase tracking-wider text-[#0b6b2e]">
+                    Problem PDF Available
+                  </p>
+                ) : null}
+                <p className="mt-2 text-xs font-bold uppercase tracking-wider text-[#002155]">Click to view details</p>
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {selectedProblem ? (
+        <div className="fixed inset-0 z-[120] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4" role="dialog" aria-modal="true">
+          <div
+            className={`w-full max-w-2xl p-5 ${
+              selectedProblem.isIndustryProblem
+                ? 'border border-[#b77a2f] bg-gradient-to-br from-[#fff9ec] via-[#fff7e7] to-[#fff1d6]'
+                : 'border border-[#c4c6d3] bg-white'
+            }`}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-xs uppercase tracking-widest text-[#8c4f00]">
+                    PROBLEM STATEMENT {selectedProblemIndex !== null ? selectedProblemIndex + 1 : ""}
+                    {" "}of {problems.length}
+                  </p>
+                </div>
+                <h4 className="mt-1 text-xl font-bold text-[#002155]">{selectedProblem.title}</h4>
+                <p className="mt-1 text-xs text-[#434651]">
+                  Type: {selectedProblem.isIndustryProblem ? `Industry${selectedProblem.industryName ? ` (${selectedProblem.industryName})` : ''}` : 'Normal'}
+                </p>
+                {selectedProblem.isIndustryProblem && selectedProblem.industryName ? (
+                  <p className="mt-2 text-[11px] font-bold uppercase tracking-wider text-[#8c4f00]">
+                    {selectedProblem.industryName} x TCET Collaboration
+                  </p>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedProblem(null);
+                  setSelectedProblemIndex(null);
+                }}
+                className="border border-[#747782] px-3 py-1 text-xs font-bold uppercase tracking-wider text-[#434651]"
+              >
+                Close
+              </button>
+            </div>
+            <p className="mt-4 text-sm text-[#434651] whitespace-pre-wrap break-words">{renderTextWithClickableLinks(selectedProblem.description)}</p>
+            {selectedProblem.supportDocumentUrl ? (
+              <a
+                href={selectedProblem.supportDocumentUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex mt-4 text-xs font-bold uppercase tracking-wider text-[#8c4f00] underline"
+              >
+                Open Problem PDF
+              </a>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {registrationSummary ? (
+        <section className="mb-8 border border-[#0b6b2e] bg-[#f2fbf4] p-5">
+          <p className="text-xs uppercase tracking-widest text-[#0b6b2e] font-bold">Already Registered</p>
+          <h3 className="mt-1 font-headline text-2xl text-[#002155]">{registrationSummary.teamName}</h3>
+          <p className="mt-2 text-sm text-[#434651]">
+            Problem: <span className="font-semibold text-[#002155]">{registrationSummary.problem.title}</span>
+          </p>
+          <p className="mt-1 text-sm text-[#434651]">
+            Team Leader:{' '}
+            <span className="font-semibold text-[#002155]">
+              {registrationSummary.teamLeader
+                ? `${registrationSummary.teamLeader.name} (${registrationSummary.teamLeader.email})${registrationSummary.teamLeader.uid ? ` - UID: ${registrationSummary.teamLeader.uid}` : ''}`
+                : 'Not available'}
+            </span>
+          </p>
+          <p className="mt-1 text-xs text-[#434651]">Registered on: {formatIstDateTime(registrationSummary.submittedAt)}</p>
+
+          <div className="mt-4">
+            <p className="text-xs uppercase tracking-widest text-[#002155] font-bold mb-2">Team Members</p>
+            <div className="space-y-2">
+              {registrationSummary.members.map((member) => (
+                <div key={`${registrationSummary.claimId}-${member.user.id}`} className="border border-[#c4c6d3] bg-white px-3 py-2 text-sm">
+                  <p className="font-semibold text-[#002155]">
+                    {member.user.name} ({member.user.email})
+                  </p>
+                  <p className="text-xs text-[#434651]">
+                    Role: {member.role}
+                    {member.user.uid ? ` | UID: ${member.user.uid}` : ''}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {registrationSummary.submissionFileUrl ? (
+            <a
+              href={registrationSummary.submissionFileUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex mt-4 text-xs font-bold uppercase tracking-wider text-[#002155] underline"
+            >
+              Open Uploaded PPT/PDF
+            </a>
+          ) : (
+            <p className="mt-4 text-xs text-[#8c4f00]">PPT/PDF link is currently unavailable.</p>
+          )}
+        </section>
+      ) : null}
+
+      {registrationSummary && viewerRole === 'STUDENT' ? (
+        <section className="mb-8 border border-[#c4c6d3] bg-white p-5">
+          <h3 className="font-headline text-2xl text-[#002155]">Session Documents</h3>
+          <p className="mt-2 text-sm text-[#434651]">
+            Upload one document for each session after admin opens that session window.
+          </p>
+
+          {sessionDocumentLoading ? (
+            <p className="mt-4 text-sm text-[#434651]">Loading session upload status...</p>
+          ) : sessionDocumentData ? (
+            <>
+              <p className="mt-2 text-xs text-[#434651]">
+                Event status: {sessionDocumentData.event.status} | Uploaded: {sessionDocumentData.summary.uploadedCount}/{sessionDocumentData.summary.requiredCount}
+              </p>
+
+              {sessionDocumentData.event.uploadableSessions.length === 0 ? (
+                <p className="mt-3 border border-dashed border-[#c4c6d3] bg-[#faf9f5] p-3 text-sm text-[#434651]">
+                  No session uploads are open right now. Once the event is opened and a session is unlocked by admin, upload appears here.
+                </p>
+              ) : (
+                <div className="mt-4 space-y-3">
+                  {sessionDocumentData.event.uploadableSessions.map((session) => {
+                    const uploaded = sessionDocumentData.sessionDocuments.find((doc) => doc.session === session) || null;
+
+                    return (
+                      <article key={`session-upload-${session}`} className="border border-[#e3e2df] bg-[#faf9f5] p-4">
+                        <p className="text-xs uppercase tracking-widest text-[#8c4f00]">Session {session}</p>
+
+                        {uploaded ? (
+                          <>
+                            <p className="mt-1 text-sm font-semibold text-[#0b6b2e]">Uploaded</p>
+                            <p className="mt-1 text-xs text-[#434651]">Uploaded at: {formatIstDateTime(uploaded.uploadedAt)}</p>
+                            {uploaded.documentFileUrl ? (
+                              <a
+                                href={uploaded.documentFileUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex mt-2 text-xs font-bold uppercase tracking-wider text-[#002155] underline"
+                              >
+                                Open Session {session} Document
+                              </a>
+                            ) : null}
+                          </>
+                        ) : (
+                          <>
+                            <input
+                              type="file"
+                              onChange={(e) =>
+                                setSessionDocumentFiles((prev) => ({
+                                  ...prev,
+                                  [session]: e.target.files?.[0] ?? null,
+                                }))
+                              }
+                              className="mt-2 w-full border border-[#c4c6d3] px-3 py-2 text-sm"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => void handleSessionDocumentUpload(session)}
+                              disabled={sessionDocumentUploadBusySession === session}
+                              className="mt-3 bg-[#002155] text-white px-4 py-2 text-xs font-bold uppercase tracking-wider disabled:opacity-60"
+                            >
+                              {sessionDocumentUploadBusySession === session ? 'Uploading...' : `Upload Session ${session} Document`}
+                            </button>
+                          </>
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          ) : (
+            <p className="mt-4 text-sm text-[#434651]">Session document data is not available right now.</p>
+          )}
+        </section>
+      ) : null}
+
+      {canShowRegistrationForm ? (
+        <section id="register-team" className="mb-8 border border-[#c4c6d3] bg-white p-5">
+          <h3 className="font-headline text-2xl text-[#002155] mb-4">Register Team</h3>
+          <p className="mb-3 text-xs text-[#434651]">UID format: STARTYEAR-BRANCHDIVISIONROLLNO-ENDYEAR (example: 24-COMPD13-28). Enter valid UIDs for all team members. First fetch user details to verify the team, then submit registration.</p>
+          <form className="grid grid-cols-1 md:grid-cols-2 gap-4" onSubmit={handleRegister}>
+            <input className="border border-[#747782] p-3 text-sm" placeholder="Team name" value={teamName} onChange={(e) => setTeamName(e.target.value)} required />
+            <select
+              className="border border-[#747782] p-3 text-sm"
+              value={teamSize}
+              onChange={(e) => setTeamSize(Number(e.target.value))}
+              required
+            >
+              <option value={1}>Total team size: 1 (Lead only)</option>
+              <option value={2}>Total team size: 2</option>
+              <option value={3}>Total team size: 3</option>
+              <option value={4}>Total team size: 4</option>
+              <option value={5}>Total team size: 5</option>
+            </select>
+            <select className="border border-[#747782] p-3 text-sm" value={problemId} onChange={(e) => setProblemId(Number(e.target.value))} required>
+              {problems.map((problem) => (
+                <option key={problem.id} value={problem.id}>
+                  {problem.title}
+                </option>
+              ))}
+            </select>
+            <input
+              className="border border-[#747782] p-3 text-sm"
+              placeholder="Team lead UID (e.g. 24-COMPD13-28)"
+              value={teamLeadUid}
+              onChange={(e) => setTeamLeadUid(e.target.value)}
+              required
+            />
+            {memberUids.map((uid, index) => (
+              <input
+                key={index}
+                className="border border-[#747782] p-3 text-sm md:col-span-2"
+                placeholder={`Member ${index + 1} UID (e.g. 24-COMPD13-28)`}
+                value={uid}
+                onChange={(e) =>
+                  setMemberUids((prev) => {
+                    const next = [...prev];
+                    next[index] = e.target.value;
+                    return next;
+                  })
+                }
+                required
+              />
+            ))}
+            <button
+              type="button"
+              onClick={() => void handleFetchUidDetails()}
+              disabled={uidLookupBusy || busy}
+              className="border border-[#002155] text-[#002155] px-4 py-3 text-xs font-bold uppercase tracking-wider md:w-fit disabled:opacity-60"
+            >
+              {uidLookupBusy ? 'Fetching UID Details...' : 'Fetch UID Details'}
+            </button>
+            {uidLookupMessage ? (
+              <p className={`md:col-span-2 text-xs ${verifiedUidSnapshot ? 'text-green-700' : 'text-[#8c4f00]'}`}>{uidLookupMessage}</p>
+            ) : null}
+            {uidLookupRows.length > 0 ? (
+              <div className="md:col-span-2 border border-[#e3e2df] bg-[#faf9f5] p-3">
+                <p className="text-xs font-bold uppercase tracking-wider text-[#002155]">UID Verification Results</p>
+                <ul className="mt-2 space-y-2">
+                  {uidLookupRows.map((row) => (
+                    <li key={row.uid} className="text-xs text-[#434651]">
+                      <span className="font-bold text-[#002155]">{row.uid}</span>: {row.found ? `${row.name || 'Unknown'} (${row.email || 'No email'})` : 'Not found'}
+                      {row.found ? ` | ${row.role} | ${row.status} | ${row.isVerified ? 'Verified' : 'Not verified'}` : ''}
+                      {' | '}
+                      <span className={row.eligible ? 'text-green-700 font-bold' : 'text-red-700 font-bold'}>
+                        {row.eligible ? 'Eligible' : 'Non-eligible'}
+                      </span>
+                      {` | ${row.reason}`}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <div className="md:col-span-2 border-2 border-dashed border-[#0b6b2e] bg-[#f2fbf4] p-4">
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-[#0b6b2e] mb-1">Required Upload: Team Presentation</label>
+              <p className="mb-2 text-xs text-[#434651]">Upload PPT/PPTX (or PDF if your deck is exported).</p>
+              <input
+                type="file"
+                accept=".ppt,.pptx,.pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/pdf"
+                onChange={(e) => setPptFile(e.target.files?.[0] ?? null)}
+                className="w-full"
+                required
+              />
+              <p className="mt-2 text-[11px] text-[#434651]">{pptFile ? `Selected: ${pptFile.name}` : 'No file selected yet.'}</p>
+            </div>
+            <button type="submit" disabled={busy || uidLookupBusy} className="bg-[#002155] text-white px-4 py-3 text-xs font-bold uppercase tracking-wider md:w-fit disabled:opacity-70">
+              {busy ? 'Submitting...' : 'Register Team'}
+            </button>
+          </form>
+        </section>
+      ) : null}
+
+      {!canShowRegistrationForm && !registrationSummary ? (
+        <p className="mb-8 border border-dashed border-[#c4c6d3] bg-white p-6 text-[#434651]">
+          {viewerRole === null
+            ? 'Login as a student to register for this event.'
+            : viewerRole !== 'STUDENT'
+              ? 'Only student accounts can register for this event.'
+              : !registrationOpen
+                ? 'Event registration is currently closed by faculty/admin.'
+                : registrationClosed
+                  ? 'Event registration is closed.'
+                  : 'Registration will open once event problems are available.'}
+          {viewerRole === null ? (
+            <Link href={`/login?next=${encodeURIComponent(`/innovation/events/${eventId}`)}`} className="ml-2 text-[#002155] font-bold underline uppercase text-xs tracking-wider">
+              Go to Login
+            </Link>
+          ) : null}
+        </p>
+      ) : null}
+
+      {status === 'CLOSED' ? (
+        <section>
+          <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <h3 className="font-headline text-2xl text-[#002155]">Leaderboard</h3>
+            
+          </div>
+          {leaderboardLoading ? (
+            <p className="text-sm text-[#434651]">Loading leaderboard...</p>
+          ) : leaderboard.length === 0 ? (
+            <p className="border border-dashed border-[#c4c6d3] bg-white p-6 text-[#434651]">No scored submissions yet.</p>
+          ) : (
+            <div className="overflow-x-auto border border-[#c4c6d3] bg-white">
+              <table className="w-full text-sm">
+                <thead className="bg-[#f5f4f0] text-[#434651] uppercase text-xs tracking-wider">
+                  <tr>
+                    <th className="text-left px-4 py-3">Rank</th>
+                    <th className="text-left px-4 py-3">Team</th>
+                    <th className="text-left px-4 py-3">Problem Statement</th>
+                    <th className="text-left px-4 py-3">Final Score</th>
+                    <th className="text-left px-4 py-3">Members</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {leaderboard.map((row) => {
+                    const rankVisual = getRankVisual(row.rank);
+
+                    return (
+                    <tr key={`${row.rank}-${row.teamName}`} className={`border-t border-[#e3e2df] ${rankVisual.row}`}>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-bold ${rankVisual.pill}`}>
+                          <span className="material-symbols-outlined text-[14px]">{rankVisual.icon}</span>
+                          #{row.rank}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">{row.teamName}</td>
+                      <td className="px-4 py-3">{row.problemTitle}</td>
+                      <td className="px-4 py-3 font-bold text-[#002155]">{row.score}</td>
+                      <td className="px-4 py-3">{row.members.map((member) => member.name).join(', ')}</td>
+                    </tr>
+                  );})}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      ) : null}
+    </>
+  );
+}

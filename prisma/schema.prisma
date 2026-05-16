@@ -1,0 +1,784 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  FACULTY
+  STUDENT
+  INDUSTRY_PARTNER
+}
+
+enum OpportunitySource {
+  TCET
+  UNSTOP
+  INTERNSHALA
+  GRANT_DB
+  MANUAL
+  LINKEDIN
+}
+
+enum OpportunityType {
+  INTERNSHIP
+  HACKATHON
+  WORKSHOP
+  GRANT
+  PLACEMENT
+  COMPETITION
+}
+
+enum ProblemType {
+  OPEN
+  INTERNSHIP
+}
+
+enum ProblemApprovalStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+}
+
+enum UserStatus {
+  ACTIVE
+  PENDING
+  REJECTED
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+  CANCELLED
+}
+
+enum GrantCategory {
+  GOVT_GRANT
+  SCHOLARSHIP
+  RESEARCH_FUND
+  INDUSTRY_GRANT
+}
+
+enum EventMode {
+  ONLINE
+  OFFLINE
+  HYBRID
+}
+
+enum ProblemMode {
+  OPEN
+  CLOSED
+}
+
+enum ProblemStatus {
+  OPENED
+  CLOSED
+  ARCHIVED
+}
+
+enum ClaimStatus {
+  IN_PROGRESS
+  SUBMITTED
+  SHORTLISTED
+  ACCEPTED
+  REVISION_REQUESTED
+  REJECTED
+}
+
+enum EventStatus {
+  UPCOMING
+  ACTIVE
+  JUDGING
+  CLOSED
+}
+
+enum ApplicationStatus {
+  SUBMITTED
+  SELECTED
+  REJECTED
+}
+
+enum InternshipTaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum InternshipDocumentType {
+  FILE
+  LINK
+}
+
+enum MeetingRecurrenceType {
+  NONE
+  WEEKLY
+}
+
+enum NotificationType {
+  TASK_ASSIGNED
+  MESSAGE_POSTED
+  MEETING_SCHEDULED
+  DOCUMENT_UPLOADED
+}
+
+enum TicketType {
+  FACILITY_BOOKING
+  HACKATHON_SELECTION
+}
+
+enum TicketStatus {
+  ACTIVE
+  USED
+  CANCELLED
+}
+
+enum MemberAttendanceStatus {
+  NOT_PRESENT
+  PRESENT
+}
+
+model User {
+  id         Int        @id @default(autoincrement())
+  name       String
+  email      String     @unique
+  phone      String?
+  password   String
+  role       Role
+  uid        String?
+  isVerified Boolean    @default(false)
+  status     UserStatus @default(ACTIVE)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  bookings          Booking[]
+  newsPosts         NewsPost[]
+  grants            Grant[]
+  events            Event[]
+  announcements     Announcement[]
+  problemsCreated   ClaimMember[]
+  hackathonsCreated HackathonEvent[] @relation("HackathonCreator")
+  problemsAuthored  Problem[]        @relation("ProblemAuthor")
+  studentProfile    StudentProfile?
+  applications      Application[]
+  tickets           Ticket[]
+  hackathonInterests HackathonInterest[]
+  programsCreated   InnovationProgram[] @relation("ProgramCreator")
+  programInterests  ProgramInterest[]
+  uploadedSessionDocuments SessionDocument[] @relation("SessionDocumentUploader")
+  sessionUploadLockUpdates HackathonSessionUploadLock[] @relation("SessionUploadLockUpdater")
+  attendanceMarkedEntries TicketAttendance[] @relation("AttendanceMarker")
+  attendanceEntries TicketAttendance[] @relation("AttendanceParticipant")
+  internshipTasks InternshipTask[] @relation("InternshipTaskAssignee")
+  internshipMessages InternshipMessage[] @relation("InternshipMessageSender")
+  internshipDocuments InternshipDocument[] @relation("InternshipDocumentUploader")
+  notifications Notification[]
+  industryId Int?
+  industry   Industry? @relation(fields: [industryId], references: [id], onDelete: SetNull)
+  chatSession   ChatSession?
+
+  @@index([industryId])
+  @@map("users")
+}
+
+model Industry {
+  id        Int       @id @default(autoincrement())
+  name      String    @unique
+  users     User[]
+  problems  Problem[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@map("industries")
+}
+
+model Problem {
+  id          Int             @id @default(autoincrement())
+  title       String
+  description String          @db.Text
+  tags        String?
+  isIndustryProblem Boolean   @default(false)
+  industryName String?
+  problemType ProblemType     @default(OPEN)
+  approvalStatus ProblemApprovalStatus @default(APPROVED)
+  mode        ProblemMode     @default(OPEN)
+  status      ProblemStatus   @default(CLOSED)
+  createdById Int
+  createdBy   User            @relation("ProblemAuthor", fields: [createdById], references: [id], onDelete: Cascade)
+  industryId  Int?
+  industry    Industry?       @relation(fields: [industryId], references: [id], onDelete: SetNull)
+  eventId     Int?
+  event       HackathonEvent? @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  claims      Claim[]
+  supportDocumentKey String?
+  applications Application[]
+  internshipTasks InternshipTask[] @relation("InternshipProblemTasks")
+  internshipMessages InternshipMessage[] @relation("InternshipProblemMessages")
+  internshipMeetings InternshipMeeting[] @relation("InternshipProblemMeetings")
+  internshipDocuments InternshipDocument[] @relation("InternshipProblemDocuments")
+  questions   ProblemQuestion[]
+  notificationSent Boolean @default(false)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([createdById])
+  @@index([industryId])
+  @@index([eventId])
+  @@index([status])
+  @@index([mode])
+  @@index([problemType])
+  @@index([approvalStatus])
+  @@map("problems")
+}
+
+model Claim {
+  id                Int           @id @default(autoincrement())
+  problemId         Int
+  problem           Problem       @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  teamName          String?
+  members           ClaimMember[]
+  status            ClaimStatus   @default(IN_PROGRESS)
+  submissionUrl     String?
+  submissionFileKey String?
+  innovationScore   Int?
+  technicalScore    Int?
+  impactScore       Int?
+  uxScore           Int?
+  executionScore    Int?
+  presentationScore Int?
+  feasibilityScore  Int?
+  finalScore        Int?
+  score             Int?
+  feedback          String?       @db.Text
+  badges            String?
+  isAbsent          Boolean       @default(false)
+  reminderSent      Boolean       @default(false)
+  tickets           Ticket[]
+  attendanceRecords TicketAttendance[]
+  sessionDocuments  SessionDocument[]
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@index([problemId])
+  @@index([status])
+  @@index([updatedAt])
+  @@map("claims")
+}
+
+model ClaimMember {
+  id      Int    @id @default(autoincrement())
+  claimId Int
+  claim   Claim  @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  userId  Int
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role    String @default("MEMBER")
+  attendanceRecords TicketAttendance[]
+
+  @@unique([claimId, userId])
+  @@index([claimId])
+  @@index([userId])
+  @@map("claim_members")
+}
+
+model SessionDocument {
+  id               Int      @id @default(autoincrement())
+  claimId          Int
+  claim            Claim    @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  session          Int
+  documentUrl      String?
+  documentKey      String
+  uploadedByUserId Int
+  uploadedBy       User     @relation("SessionDocumentUploader", fields: [uploadedByUserId], references: [id], onDelete: Cascade)
+  uploadedAt       DateTime @default(now())
+
+  @@unique([claimId, session])
+  @@index([claimId])
+  @@index([session])
+  @@index([uploadedAt])
+  @@index([uploadedByUserId])
+  @@map("session_documents")
+}
+
+model HackathonSessionUploadLock {
+  id              Int            @id @default(autoincrement())
+  eventId         Int
+  event           HackathonEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  session         Int
+  isOpen          Boolean        @default(false)
+  updatedByUserId Int?
+  updatedBy       User?          @relation("SessionUploadLockUpdater", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@unique([eventId, session])
+  @@index([eventId])
+  @@index([session])
+  @@index([updatedByUserId])
+  @@map("hackathon_session_upload_locks")
+}
+
+model StudentProfile {
+  id          Int       @id @default(autoincrement())
+  userId      Int       @unique
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  summary     String?   @db.Text
+  skills      String?   @db.Text
+  experience  String?   @db.Text
+  interests   String?   @db.Text
+  internships Json?
+  projects    Json?
+  education   Json?
+  languages   Json?
+  certifications Json?
+  awards      Json?
+  clubs       Json?
+  exams       Json?
+  employment  Json?
+  achievements Json?
+  preferences Json?
+  resumeUrl   String?
+  isComplete  Boolean   @default(false)
+  updatedAt   DateTime  @updatedAt
+  applications Application[]
+
+  @@map("student_profiles")
+}
+
+model ProblemQuestion {
+  id         Int       @id @default(autoincrement())
+  problemId  Int
+  problem    Problem   @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  questionText String  @db.Text
+  type       String    @default("TEXT")
+  createdAt  DateTime  @default(now())
+
+  answers ApplicationAnswer[]
+
+  @@index([problemId])
+  @@map("problem_questions")
+}
+
+model Application {
+  id          Int       @id @default(autoincrement())
+  userId      Int
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profileId   Int
+  profile     StudentProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  problemId   Int
+  problem     Problem   @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  status      ApplicationStatus @default(SUBMITTED)
+  answers     ApplicationAnswer[]
+  feedback    String?   @db.Text
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([userId, problemId])
+  @@index([problemId])
+  @@index([userId])
+  @@index([status])
+  @@map("applications")
+}
+
+model ApplicationAnswer {
+  id          Int       @id @default(autoincrement())
+  applicationId Int
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  questionId  Int
+  question    ProblemQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answerText  String    @db.Text
+
+  @@unique([applicationId, questionId])
+  @@index([applicationId])
+  @@map("application_answers")
+}
+
+model InternshipTask {
+  id           Int                 @id @default(autoincrement())
+  problemId    Int
+  problem      Problem             @relation("InternshipProblemTasks", fields: [problemId], references: [id], onDelete: Cascade)
+  title        String
+  description  String?             @db.Text
+  assignedToId Int
+  assignedTo   User                @relation("InternshipTaskAssignee", fields: [assignedToId], references: [id], onDelete: Cascade)
+  deadline     DateTime?
+  status       InternshipTaskStatus @default(PENDING)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  @@index([problemId, status])
+  @@index([assignedToId, status])
+  @@map("internship_tasks")
+}
+
+model InternshipMessage {
+  id           Int        @id @default(autoincrement())
+  problemId    Int
+  problem      Problem    @relation("InternshipProblemMessages", fields: [problemId], references: [id], onDelete: Cascade)
+  senderId     Int
+  sender       User       @relation("InternshipMessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  content      String     @db.Text
+  createdAt    DateTime   @default(now())
+
+  @@index([problemId, createdAt])
+  @@index([senderId])
+  @@map("internship_messages")
+}
+
+model InternshipMeeting {
+  id           Int        @id @default(autoincrement())
+  problemId    Int
+  problem      Problem    @relation("InternshipProblemMeetings", fields: [problemId], references: [id], onDelete: Cascade)
+  title        String
+  datetime     DateTime
+  link         String
+  description  String?    @db.Text
+  recurrenceType MeetingRecurrenceType @default(NONE)
+  recurrenceInterval Int     @default(1)
+  recurrenceDay Int?
+  isActive     Boolean   @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@index([problemId, datetime])
+  @@map("internship_meetings")
+}
+
+model InternshipDocument {
+  id           Int        @id @default(autoincrement())
+  problemId    Int
+  problem      Problem    @relation("InternshipProblemDocuments", fields: [problemId], references: [id], onDelete: Cascade)
+  fileUrl      String?
+  linkUrl      String?
+  title        String?
+  documentType InternshipDocumentType @default(FILE)
+  uploadedById Int
+  uploadedBy   User       @relation("InternshipDocumentUploader", fields: [uploadedById], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
+  @@index([problemId, createdAt])
+  @@index([uploadedById])
+  @@map("internship_documents")
+}
+
+model Notification {
+  id        Int              @id @default(autoincrement())
+  userId    Int
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  body      String?          @db.Text
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, createdAt])
+  @@index([type])
+  @@map("notifications")
+}
+
+model HackathonEvent {
+  id          Int         @id @default(autoincrement())
+  title       String
+  description String?     @db.Text
+  startTime   DateTime
+  endTime     DateTime
+  submissionLockAt DateTime?
+  totalSessions Int @default(1)
+  registrationOpen Boolean @default(true)
+  status      EventStatus @default(UPCOMING)
+  createdById Int
+  createdBy   User        @relation("HackathonCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  problems    Problem[]
+  interests   HackathonInterest[]
+  sessionUploadLocks HackathonSessionUploadLock[]
+  pptFileKey  String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([status])
+  @@index([startTime])
+  @@index([endTime])
+  @@index([createdById])
+  @@map("hackathon_events")
+}
+
+model HackathonInterest {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  eventId    Int
+  hasDetails Boolean  @default(false)
+  teamName   String?
+  teamSize   Int?
+  createdAt  DateTime @default(now())
+
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event      HackathonEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, eventId])
+  @@index([eventId, hasDetails])
+  @@index([eventId, createdAt])
+  @@map("hackathon_interests")
+}
+
+model InnovationProgram {
+  id            String   @id @default(cuid())
+  title         String
+  description   String   @db.Text
+  programType   String
+  venue         String
+  eventDate     DateTime
+  startTime     DateTime
+  endTime       DateTime
+  noticeFileKey String?
+  createdById   Int
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  createdBy     User              @relation("ProgramCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  interests     ProgramInterest[]
+
+  @@index([eventDate])
+  @@index([createdById])
+  @@map("innovation_programs")
+}
+
+model ProgramInterest {
+  id         String   @id @default(cuid())
+  userId     Int
+  programId  String
+  createdAt  DateTime @default(now())
+
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  program    InnovationProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, programId])
+  @@index([programId, createdAt])
+  @@map("program_interests")
+}
+
+model Otp {
+  id        Int      @id @default(autoincrement())
+  email     String
+  code      String
+  createdAt DateTime @default(now())
+
+  @@index([email])
+  @@map("otps")
+}
+
+model Booking {
+  id           Int           @id @default(autoincrement())
+  studentId    Int
+  student      User          @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  purpose      String        @db.Text
+  date         DateTime
+  timeSlot     String
+  facilities   Json
+  lab          String
+  status       BookingStatus @default(PENDING)
+  adminNote    String?       @db.Text
+  reminderSent Boolean       @default(false)
+  ticket       Ticket?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@map("bookings")
+}
+
+model Ticket {
+  id          Int          @id @default(autoincrement())
+  ticketId    String       @unique
+  type        TicketType
+  status      TicketStatus @default(ACTIVE)
+  userId      Int
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bookingId   Int?         @unique
+  booking     Booking?     @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  claimId     Int?
+  claim       Claim?       @relation(fields: [claimId], references: [id], onDelete: SetNull)
+  title       String
+  subjectName String
+  scheduledAt DateTime?
+  pdfObjectKey String
+  qrValue     String
+  issuedAt    DateTime     @default(now())
+  usedAt      DateTime?
+  cancelledAt DateTime?
+  metadata    Json?
+  attendanceRecords TicketAttendance[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@unique([claimId, type])
+  @@index([userId, status])
+  @@index([type, status])
+  @@index([issuedAt])
+  @@map("tickets")
+}
+
+model TicketAttendance {
+  id                Int                    @id @default(autoincrement())
+  ticketId          Int
+  ticket            Ticket                 @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  claimId           Int
+  claim             Claim                  @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  userId            Int
+  user              User                   @relation("AttendanceParticipant", fields: [userId], references: [id], onDelete: Cascade)
+  claimMemberId     Int
+  claimMember       ClaimMember            @relation(fields: [claimMemberId], references: [id], onDelete: Cascade)
+  session           Int                    @default(1)
+  status            MemberAttendanceStatus @default(NOT_PRESENT)
+  checkedInAt       DateTime?
+  checkedInByUserId Int?
+  checkedInBy       User?                  @relation("AttendanceMarker", fields: [checkedInByUserId], references: [id], onDelete: SetNull)
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  @@unique([ticketId, claimMemberId, session])
+  @@unique([userId, claimId, session])
+  @@index([ticketId, session, status])
+  @@index([claimMemberId, session, status])
+  @@index([claimId, session, status])
+  @@index([checkedInByUserId])
+  @@map("ticket_attendance")
+}
+
+model NewsPost {
+  id          Int      @id @default(autoincrement())
+  title       String
+  caption     String   @db.Text
+  imageKey    String
+  postedById  Int
+  postedBy    User     @relation(fields: [postedById], references: [id], onDelete: Cascade)
+  publishedAt DateTime @default(now())
+  isVisible   Boolean  @default(true)
+
+  @@map("news_posts")
+}
+
+model Grant {
+  id            Int           @id @default(autoincrement())
+  title         String
+  issuingBody   String
+  category      GrantCategory
+  description   String        @db.Text
+  deadline      DateTime
+  referenceLink String?
+  attachmentKey String?
+  postedById    Int
+  postedBy      User          @relation(fields: [postedById], references: [id], onDelete: Cascade)
+  isActive      Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+
+  @@map("grants")
+}
+
+model Event {
+  id               Int       @id @default(autoincrement())
+  title            String
+  description      String    @db.Text
+  date             DateTime
+  mode             EventMode
+  registrationLink String?
+  posterKey        String?
+  postedById       Int
+  postedBy         User      @relation(fields: [postedById], references: [id], onDelete: Cascade)
+  isVisible        Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+
+  @@map("events")
+}
+
+model Announcement {
+  id          Int      @id @default(autoincrement())
+  text        String   @db.Text
+  link        String?
+  expiresAt   DateTime
+  createdById Int
+  createdBy   User     @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@map("announcements")
+}
+
+model HeroSlide {
+  id        Int      @id @default(autoincrement())
+  title     String
+  caption   String   @db.Text
+  imageKey  String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("hero_slides")
+}
+
+model EmailJob {
+  id                Int       @id @default(autoincrement())
+  toEmail           String
+  subject           String
+  htmlBody          String    @db.LongText
+  category          String
+  mode              String    @default("IMMEDIATE")
+  status            String    @default("PENDING")
+  priority          Int       @default(50)
+  attempts          Int       @default(0)
+  maxAttempts       Int       @default(5)
+  nextAttemptAt     DateTime?
+  lastAttemptAt     DateTime?
+  sentAt            DateTime?
+  lockedAt          DateTime?
+  lastError         String?   @db.Text
+  providerMessageId String?
+  dedupeKey         String?   @unique
+  metadata          Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([category])
+  @@index([mode])
+  @@index([createdAt])
+  @@map("email_jobs")
+}
+
+model ScrapedOpportunity {
+  id               Int               @id @default(autoincrement())
+  externalId       String            @unique
+  source           OpportunitySource
+  type             OpportunityType
+  title            String
+  description      String            @db.Text
+  tags             String?           @db.Text
+  company          String?
+  location         String?
+  stipend          String?
+  deadline         DateTime?
+  registrationLink String?
+  isActive         Boolean           @default(true)
+  isVerified       Boolean           @default(false)
+  scrapedAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([source])
+  @@index([type])
+  @@index([isActive, isVerified])
+  @@index([deadline])
+  @@index([scrapedAt])
+  @@map("scraped_opportunities")
+}
+
+model ChatSession {
+  id          Int      @id @default(autoincrement())
+  userId      Int      @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  queryCount  Int      @default(0)
+  windowStart DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+  @@map("chat_sessions")
+}

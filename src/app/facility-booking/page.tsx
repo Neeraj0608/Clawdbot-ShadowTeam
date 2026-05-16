@@ -1,0 +1,539 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useToast } from "@/components/ToastProvider";
+import { trackEvent } from "@/lib/analytics";
+
+type BookingItem = {
+  id: number;
+  lab: string;
+  date: string;
+  timeSlot: string;
+  status: string;
+  purpose: string;
+};
+
+type ParsedUidDetails = {
+  normalizedUid: string;
+  startYear: string;
+  endYear: string;
+  branch: string;
+  division: string;
+  rollNo: string;
+};
+
+export default function FacilityBookingPage() {
+  const { pushToast } = useToast();
+  const bookingAuthHref = "/login?next=%2Ffacility-booking&reason=booking-auth-required";
+  const formatDateForInput = (value: Date) => {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, "0");
+    const day = String(value.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+  const today = new Date();
+  const maxBookingDate = new Date(today);
+  maxBookingDate.setMonth(maxBookingDate.getMonth() + 1);
+  const minBookingDateStr = formatDateForInput(today);
+  const maxBookingDateStr = formatDateForInput(maxBookingDate);
+  const [step, setStep] = useState(1);
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [redirectingToLogin, setRedirectingToLogin] = useState(false);
+  const [isLogin, setIsLogin] = useState(true);
+  
+  // Auth Form
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+   const [loginIdentifier, setLoginIdentifier] = useState("");
+   const [verificationEmail, setVerificationEmail] = useState("");
+  const [uid, setUid] = useState("");
+  const [role, setRole] = useState("STUDENT"); // STUDENT or FACULTY
+  
+  const [otpSent, setOtpSent] = useState(false);
+  const [otp, setOtp] = useState("");
+  const [uidPreview, setUidPreview] = useState<ParsedUidDetails | null>(null);
+  const [authError, setAuthError] = useState("");
+  const [authSuccess, setAuthSuccess] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  // Form State
+  const [purpose, setPurpose] = useState("");
+  const [date, setDate] = useState("");
+  const [time, setTime] = useState("");
+  const [lab, setLab] = useState("");
+  const [equipment, setEquipment] = useState<string[]>([]);
+  
+  // Booking result
+  const [bookingRef, setBookingRef] = useState("");
+  const [myBookings, setMyBookings] = useState<BookingItem[]>([]);
+  const [cancellingBookingId, setCancellingBookingId] = useState<number | null>(null);
+  
+  const availableLabs = [
+    "Research Culture Development Room 701",
+    // "Industrial IoT & OT Room 213",
+    // "Robotics & Automation Room 010",
+  ];
+
+  const labEquipmentMap: Record<string, string[]> = {
+    "Research Culture Development Room 701": [
+      "Workstation",
+      "Computer",
+      "Deployable server",
+      "AI computing server",
+      "Projector & whiteboard",
+    ],
+    // "Industrial IoT & OT Room 213": [
+    //   "PLC training rack (mock)",
+    //   "IoT sensor bench (mock)",
+    //   "Edge gateway demo kit (mock)",
+    //   "SCADA simulator (mock)",
+    // ],
+    // "Robotics & Automation Room 010": [
+    //   "6-axis robot demo cell (mock)",
+    //   "Conveyor automation rig (mock)",
+    //   "Vision inspection station (mock)",
+    //   "Safety light curtain (mock)",
+    // ],
+  };
+
+  const availableEquipment = lab ? labEquipmentMap[lab] ?? [] : [];
+  const timeSlots = ["09:00 - 11:00", "11:00 - 13:00", "13:00 - 15:00", "15:00 - 17:00", "17:00 - 19:00"];
+
+  const loadMyBookings = async () => {
+    const res = await fetch("/api/bookings/my", {
+      method: "GET",
+      credentials: "include",
+    });
+
+    if (!res.ok) {
+      setMyBookings([]);
+      return false;
+    }
+
+    const payload = await res.json();
+    const rows = Array.isArray(payload?.data) ? payload.data : [];
+    setMyBookings(rows);
+    return true;
+  };
+
+  useEffect(() => {
+    const checkSession = async () => {
+      try {
+        const hasSession = await loadMyBookings();
+        if (hasSession) {
+          setStep(3);
+          setAuthSuccess("Active session found. You can continue booking.");
+          return;
+        }
+
+        setRedirectingToLogin(true);
+        window.location.replace(bookingAuthHref);
+      } catch {
+        setRedirectingToLogin(true);
+        window.location.replace(bookingAuthHref);
+      } finally {
+        setCheckingSession(false);
+      }
+    };
+
+    void checkSession();
+
+    const handleBookingUpdate = () => {
+      void loadMyBookings();
+    };
+
+    window.addEventListener('booking-updated', handleBookingUpdate);
+    return () => window.removeEventListener('booking-updated', handleBookingUpdate);
+  }, []);
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        credentials: "include",
+      });
+    } finally {
+      window.location.assign("/login");
+    }
+  };
+
+  if (checkingSession || redirectingToLogin) {
+    return (
+      <main className="max-w-7xl mx-auto px-4 md:px-8 pt-[120px] pb-12 min-h-screen">
+        <div className="border border-[#c4c6d3] bg-white p-6 md:p-8">
+          <p className="text-sm text-[#434651]">
+            {redirectingToLogin ? "Redirecting to login..." : "Checking your session..."}
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  // Removed embedded login handlers in favor of central login redirect.
+
+  const handleSubmitBooking = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError("");
+    setLoading(true);
+    let trackedBookingFailure = false;
+    try {
+      const res = await fetch("/api/bookings", {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json"
+        },
+        credentials: "include",
+        body: JSON.stringify({
+          purpose,
+          date,
+          timeSlot: time,
+          lab,
+          facilities: equipment
+        })
+      });
+
+      if (res.status === 401) {
+        window.location.replace(bookingAuthHref);
+        return;
+      }
+
+      const data = await res.json();
+      if (!res.ok) {
+        const reason = res.status >= 500 ? "server_error" : "validation";
+        try {
+          trackEvent("booking_failed", { reason });
+        } catch {
+          // analytics must never break booking flow
+        }
+        trackedBookingFailure = true;
+        throw new Error(data.message || "Booking failed");
+      }
+
+      try {
+        trackEvent("booking_created", {
+          facility_name: lab,
+          booking_date: new Date(date).toISOString(),
+        });
+      } catch {
+        // analytics must never break booking flow
+      }
+      
+      setBookingRef(`COE-2026-${data.data.id}-B`);
+      setStep(4);
+      await loadMyBookings();
+      pushToast("Booking submitted successfully.", "success");
+    } catch (err: unknown) {
+      if (!trackedBookingFailure) {
+        try {
+          trackEvent("booking_failed", { reason: "server_error" });
+        } catch {
+          // analytics must never break booking flow
+        }
+      }
+
+      const message = err instanceof Error ? err.message : "Please try again.";
+      setAuthError(message);
+      pushToast(`Booking error: ${message}`, "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCancelBooking = async (bookingId: number) => {
+    setAuthError("");
+    setCancellingBookingId(bookingId);
+    try {
+      const res = await fetch(`/api/bookings/${bookingId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.message || "Failed to cancel booking.");
+
+      try {
+        trackEvent("booking_cancelled", { booking_id: String(bookingId) });
+      } catch {
+        // analytics must never break booking flow
+      }
+
+      await loadMyBookings();
+      pushToast("Booking cancelled successfully.", "success");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to cancel booking.";
+      setAuthError(message);
+      pushToast(message, "error");
+    } finally {
+      setCancellingBookingId(null);
+    }
+  };
+
+  const handleToggleEquipment = (item: string) => {
+    if (equipment.includes(item)) {
+      setEquipment(equipment.filter(e => e !== item));
+    } else {
+      setEquipment([...equipment, item]);
+    }
+  };
+
+  return (
+    <main className="max-w-7xl mx-auto mt-10 px-4 md:px-8 pt-[120px] pb-12 min-h-screen">
+      {/* Header Section */}
+      <header className="mb-8 md:mb-12 border-l-4 border-[#002155] pl-4 md:pl-6">
+        <h1 className="font-headline text-3xl md:text-[40px] font-bold tracking-tight text-[#002155] leading-none">
+          Research Facility Reservation
+        </h1>
+        <p className="mt-2 text-[#434651] max-w-2xl font-body">
+          Institutional access to advanced laboratories, high-performance computing clusters, and specialized analytical equipment for academic excellence.
+        </p>
+      </header>
+
+      {/* Stepper Component */}
+      <div className="flex flex-wrap items-center gap-4 mb-8 md:mb-12 border-b border-[#c4c6d3] pb-6">
+        <div className="flex items-center gap-3">
+          <span className={`font-['Roboto'] font-bold ${step >= 1 ? "text-[#fd9923]" : "text-[#747782]"}`}>01 Identity</span>
+          <div className={`h-px w-8 ${step >= 3 ? "bg-[#fd9923]" : "bg-[#c4c6d3]"}`}></div>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className={`font-['Roboto'] font-bold ${step >= 3 ? "text-[#fd9923]" : "text-[#747782]"}`}>02 Book</span>
+          <div className={`h-px w-8 ${step >= 4 ? "bg-[#fd9923]" : "bg-[#c4c6d3]"}`}></div>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className={`font-['Roboto'] font-bold ${step >= 4 ? "text-[#002155]" : "text-[#747782]"}`}>03 Confirm</span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        <section className="lg:col-span-8 space-y-12">
+          
+          {/* Removed redundant login form. Session check handles redirects. */}
+
+          {/* STEP 3: BOOKING FORM */}
+          {step === 3 && (
+            <div className="bg-white border border-[#c4c6d3] p-6 md:p-10 animate-fade-in shadow-sm">
+              <div className="flex justify-between items-center mb-8 border-b border-gray-200 pb-4">
+                <h2 className="font-headline text-2xl font-bold text-[#002155]">
+                  Resource Scheduling
+                </h2>
+                <div className="flex gap-4 items-center">
+                  <span className="text-[10px] font-['Inter'] font-bold text-[#8c4f00] uppercase tracking-widest bg-[#f5f4f0] px-3 py-1 border border-[#c4c6d3]">Authenticated</span>
+                  <button onClick={handleLogout} className="text-xs uppercase text-red-600 font-bold hover:underline">Logout</button>
+                </div>
+              </div>
+
+              <div className="mb-8 border border-[#c4c6d3] bg-[#f5f4f0] p-4">
+                <h3 className="text-xs font-bold uppercase tracking-widest text-[#002155] mb-3">
+                  My Recent Bookings
+                </h3>
+                {myBookings.length === 0 ? (
+                  <p className="text-sm text-[#434651]">No previous bookings found.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {myBookings.slice(0, 4).map((booking) => (
+                      <div key={booking.id} className="border border-[#c4c6d3] bg-white p-3">
+                        <p className="text-xs font-bold uppercase tracking-wider text-[#002155]">
+                          #{booking.id} • {booking.lab}
+                        </p>
+                        <p className="mt-1 text-xs text-[#434651]">
+                          {new Date(booking.date).toLocaleDateString()} • {booking.timeSlot} • {booking.status}
+                        </p>
+                        {booking.status === "PENDING" ? (
+                          <button
+                            type="button"
+                            onClick={() => void handleCancelBooking(booking.id)}
+                            disabled={cancellingBookingId === booking.id}
+                            className="mt-2 text-[11px] font-bold uppercase tracking-widest text-red-700 underline disabled:opacity-60"
+                          >
+                            {cancellingBookingId === booking.id ? "Cancelling..." : "Cancel Booking"}
+                          </button>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              
+              <form className="space-y-8" onSubmit={handleSubmitBooking}>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="flex flex-col gap-2">
+                    <label className="font-['Inter'] text-xs font-bold uppercase tracking-wider text-[#434651]">Target Laboratory <span className="text-red-500">*</span></label>
+                    <select
+                      className="w-full bg-white border border-[#747782] p-3 text-sm outline-none"
+                      value={lab}
+                      onChange={(e) => {
+                        setLab(e.target.value);
+                        setEquipment([]);
+                      }}
+                      required
+                      style={{ borderRadius: 0 }}
+                    >
+                      <option value="" disabled>Select a facility...</option>
+                      {availableLabs.map(l => <option key={l} value={l}>{l}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <label className="font-['Inter'] text-xs font-bold uppercase tracking-wider text-[#434651]">Date of Visit <span className="text-red-500">*</span></label>
+                    <input
+                      type="date"
+                      className="w-full bg-white border border-[#747782] p-3 text-sm outline-none"
+                      value={date}
+                      onChange={(e) => setDate(e.target.value)}
+                      min={minBookingDateStr}
+                      max={maxBookingDateStr}
+                      required
+                      style={{ borderRadius: 0 }}
+                    />
+                    <p className="text-[11px] text-[#434651]">Booking date must be from today up to 1 month ahead.</p>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <label className="font-['Inter'] text-xs font-bold uppercase tracking-wider text-[#434651]">Preferred Time Slot <span className="text-red-500">*</span></label>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+                    {timeSlots.map((slot) => (
+                      <button key={slot} type="button" onClick={() => setTime(slot)} className={`border py-3 text-[11px] font-bold uppercase transition-colors ${time === slot ? "bg-[#002155] text-white border-[#002155]" : "border-[#c4c6d3] text-[#1b1c1a] hover:border-[#002155] bg-[#f5f4f0]"}`}>
+                        {slot}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <label className="font-['Inter'] text-xs font-bold uppercase tracking-wider text-[#434651]">Required Equipment (Optional)</label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {availableEquipment.map((eq) => (
+                      <label key={eq} className={`flex items-center gap-3 p-3 border cursor-pointer transition-colors ${equipment.includes(eq) ? 'border-[#002155] bg-blue-50/10' : 'border-[#c4c6d3] hover:bg-[#f5f4f0]'}`}>
+                        <input type="checkbox" checked={equipment.includes(eq)} onChange={() => handleToggleEquipment(eq)} className="w-4 h-4 accent-[#002155] rounded-none outline-none border-[#747782]" style={{ borderRadius: 0 }} />
+                        <span className={`text-sm ${equipment.includes(eq) ? 'font-bold text-[#002155]' : 'font-medium text-[#434651]'}`}>{eq}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <label className="font-['Inter'] text-xs font-bold uppercase tracking-wider text-[#434651]">Purpose of Research / Visit <span className="text-red-500">*</span></label>
+                  <textarea className="w-full bg-white border border-[#747782] p-4 text-sm outline-none resize-none min-h-[120px]" placeholder="Briefly describe the research activity, related grant, or academic purpose." value={purpose} onChange={(e) => setPurpose(e.target.value)} required style={{ borderRadius: 0 }}></textarea>
+                </div>
+
+                <div className="pt-8 flex justify-end items-center border-t border-[#c4c6d3]">
+                  <button type="submit" disabled={!lab || !date || !time || !purpose || loading} className="bg-[#002155] disabled:bg-[#c4c6d3] disabled:cursor-not-allowed text-white px-8 py-4 font-['Inter'] text-sm font-bold uppercase tracking-widest hover:bg-[#1a438e] transition-colors inline-flex items-center gap-2">
+                    {loading ? "Submitting..." : "Submit Booking"}
+                    <span className="material-symbols-outlined text-sm">send</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* STEP 4: CONFIRMATION */}
+          {step === 4 && (
+            <div className="bg-white border border-[#c4c6d3] border-t-8 border-t-[#002155] p-8 md:p-12 text-center animate-fade-in shadow-lg">
+              <div className="w-20 h-20 bg-[#efeef0] text-[#002155] rounded-full flex items-center justify-center mx-auto mb-6">
+                <span className="material-symbols-outlined text-4xl">inventory_2</span>
+              </div>
+              <h2 className="font-headline text-3xl font-bold text-[#002155] mb-2">Booking Sent for Approval</h2>
+              <p className="font-['Inter'] text-xs font-bold uppercase tracking-widest text-[#fd9923] mb-8">
+                Reference ID: <span className="text-[#002155] underline">{bookingRef}</span>
+              </p>
+              
+              <div className="bg-[#f5f4f0] border border-[#c4c6d3] p-6 text-left max-w-lg mx-auto mb-8 space-y-4">
+                <div className="grid grid-cols-3 gap-2 border-b border-[#c4c6d3] pb-3">
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#747782] col-span-1">Visitor</p>
+                  <p className="text-sm font-bold text-[#002155] col-span-2">{email} (STUDENT)</p>
+                </div>
+                <div className="grid grid-cols-3 gap-2 border-b border-[#c4c6d3] pb-3">
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#747782] col-span-1">Facility</p>
+                  <p className="text-sm font-bold text-[#002155] col-span-2">{lab}</p>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <p className="text-xs font-bold uppercase tracking-widest text-[#747782] col-span-1">Schedule</p>
+                  <p className="text-sm font-bold text-[#002155] col-span-2">{date} <br/> <span className="text-xs font-normal">{time}</span></p>
+                </div>
+              </div>
+
+              <p className="text-sm text-[#434651] font-body mb-8 px-4">
+                Your request has been forwarded to the Laboratory Superintendent. You will receive an email notification upon clearance from the administration.
+              </p>
+
+              <button onClick={() => { setStep(3); setPurpose(""); setEquipment([]); setDate(""); setTime(""); setLab(""); }} className="bg-transparent border-2 border-[#002155] text-[#002155] px-8 py-3 font-['Inter'] text-xs font-bold uppercase hover:bg-[#002155] hover:text-white transition-colors">
+                Book Another Session
+              </button>
+            </div>
+          )}
+        </section>
+
+        {/* Right Column: Guidelines */}
+        <aside className="lg:col-span-4 space-y-6 md:space-y-8 h-fit lg:sticky lg:top-[120px]">
+          <div className="bg-[#002155] text-white p-6 md:p-8">
+            <h3 className="font-headline text-xl font-bold mb-4">Institutional Protocol</h3>
+            <ul className="space-y-4 text-xs lg:text-sm opacity-90 font-body">
+              <li className="flex gap-3"><span className="material-symbols-outlined text-[#fd9923] flex-shrink-0 text-lg">priority_high</span><span>Bookings must be made 48 hours for faculty and 72 hours for students.</span></li>
+              <li className="flex gap-3"><span className="material-symbols-outlined text-[#fd9923] flex-shrink-0 text-lg">admin_panel_settings</span><span>Only verified users with @tcetmumbai.in domain are granted automated initial clearance.</span></li>
+              <li className="flex gap-3"><span className="material-symbols-outlined text-[#fd9923] flex-shrink-0 text-lg">gavel</span><span>Users are strictly liable for any physical damage to high-precision instrumentation.</span></li>
+            </ul>
+          </div>
+
+          <div className="border border-[#c4c6d3] p-6 md:p-8 bg-white shadow-sm">
+            <h3 className="font-['Inter'] text-[10px] md:text-xs font-bold uppercase tracking-widest text-[#002155] mb-5 border-b-2 border-[#002155] pb-2 inline-block">Immediate Support</h3>
+            <div className="space-y-5">
+              <div>
+                <p className="font-bold text-sm text-[#002155]">Lab Superintendent</p>
+                <p className="text-[11px] md:text-xs text-[#434651] italic">tcet.cercd@tcetmumbai.in</p>
+                <p className="text-[11px] md:text-xs font-bold text-[#8c4f00] mt-1">+91 22 6730 8000 (Ext: 104)</p>
+              </div>
+              <div className="pt-4 border-t border-[#dbdad6]">
+                <p className="font-bold text-sm text-[#002155]">System Administrator</p>
+                <p className="text-[11px] md:text-xs text-[#434651] italic">tcet.cercd@tcetmumbai.in</p>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      {uidPreview ? (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 px-4">
+          <div className="w-full max-w-xl border border-[#c4c6d3] bg-white p-6 md:p-8 shadow-xl">
+            <h3 className="font-headline text-2xl text-[#002155]">Confirm UID Details</h3>
+            <p className="mt-2 text-sm text-[#434651]">
+              Please verify the extracted information before sending OTP.
+            </p>
+
+            <div className="mt-5 border border-[#c4c6d3] bg-[#f5f4f0] p-4">
+              <p className="text-xs font-bold uppercase tracking-widest text-[#747782]">Entered UID</p>
+              <p className="mt-1 text-sm font-bold text-[#002155]">{uidPreview.normalizedUid}</p>
+
+              <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                <p><span className="text-[#747782]">Start Year:</span> <span className="font-bold text-[#002155]">{uidPreview.startYear}</span></p>
+                <p><span className="text-[#747782]">End Year:</span> <span className="font-bold text-[#002155]">{uidPreview.endYear}</span></p>
+                <p><span className="text-[#747782]">Branch:</span> <span className="font-bold text-[#002155]">{uidPreview.branch}</span></p>
+                <p><span className="text-[#747782]">Division:</span> <span className="font-bold text-[#002155]">{uidPreview.division}</span></p>
+                <p className="sm:col-span-2"><span className="text-[#747782]">Roll No:</span> <span className="font-bold text-[#002155]">{uidPreview.rollNo}</span></p>
+              </div>
+            </div>
+
+            <div className="mt-6 flex flex-col sm:flex-row gap-3 sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setUidPreview(null)}
+                disabled={loading}
+                className="border border-[#c4c6d3] px-5 py-3 text-xs font-bold uppercase tracking-wider text-[#434651] disabled:opacity-60"
+              >
+                Edit UID
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmUidAndRegister()}
+                disabled={loading}
+                className="bg-[#002155] px-5 py-3 text-xs font-bold uppercase tracking-wider text-white disabled:opacity-60"
+              >
+                {loading ? "Processing..." : "Confirm & Send OTP"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </main>
+  );
+}

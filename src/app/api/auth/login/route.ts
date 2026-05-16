@@ -1,0 +1,115 @@
+import { NextRequest, NextResponse } from 'next/server';
+import prisma from '@/lib/prisma';
+import bcrypt from 'bcryptjs';
+import { errorRes, useSecureCookies } from '@/lib/api-helpers';
+import { loginSchema } from '@/lib/validators';
+import {
+  ACCESS_TOKEN_TTL_SECONDS,
+  REFRESH_TOKEN_TTL_SECONDS,
+  SHARED_TOKEN_TTL_SECONDS,
+  generateAccessToken,
+  generateRefreshToken,
+  generateSharedToken,
+  TokenPayload,
+} from '@/lib/jwt';
+import { buildSharedTokenPayload, getSharedCookieOptions, SHARED_COOKIE_NAME } from '@/lib/shared-auth';
+
+
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const parsed = loginSchema.safeParse(body);
+    if (!parsed.success) {
+      return errorRes('Validation failed', parsed.error.issues.map((e: any) => e.message), 400);
+    }
+
+    const { identifier, password } = parsed.data;
+    const normalizedIdentifier = identifier.trim();
+    const normalizedEmail = normalizedIdentifier.toLowerCase();
+    const normalizedUid = normalizedIdentifier.toUpperCase();
+
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [{ email: normalizedEmail }, { uid: normalizedUid }],
+      },
+    });
+    if (!user) {
+      return errorRes('Invalid email/UID or password.', [], 401);
+    }
+
+    // Check password
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return errorRes('Invalid email/UID or password.', [], 401);
+    }
+
+    // Check status (faculty pending/rejected)
+    if (user.status === 'PENDING') {
+      return errorRes('Your account is pending admin approval.', [], 403);
+    }
+    if (user.status === 'REJECTED') {
+      return errorRes('Your account registration was rejected.', [], 403);
+    }
+
+    // Delete existing OTPs for this email just in case
+    await prisma.otp.deleteMany({ where: { email: user.email } });
+
+    // Generate JWT tokens directly (OTP bypassed)
+    const payload: TokenPayload = {
+      id: user.id,
+      role: user.role,
+      name: user.name,
+      email: user.email,
+      industryId: user.industryId,
+      ...(user.uid && { uid: user.uid }),
+    };
+
+    const accessToken = generateAccessToken(payload);
+    const refreshToken = generateRefreshToken(payload);
+    const sharedToken = generateSharedToken(buildSharedTokenPayload(user));
+    const secureCookies = useSecureCookies();
+    const sharedCookieOptions = getSharedCookieOptions();
+
+    const response = NextResponse.json({
+      success: true,
+      message: 'Login successful.',
+      data: {
+        accessToken,
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          uid: user.uid,
+          industryId: user.industryId,
+        },
+      },
+    });
+
+    response.cookies.set('accessToken', accessToken, {
+      httpOnly: true,
+      secure: secureCookies,
+      sameSite: 'lax',
+      maxAge: ACCESS_TOKEN_TTL_SECONDS,
+      path: '/',
+    });
+
+    response.cookies.set('refreshToken', refreshToken, {
+      httpOnly: true,
+      secure: secureCookies,
+      sameSite: 'lax',
+      maxAge: REFRESH_TOKEN_TTL_SECONDS,
+      path: '/',
+    });
+
+    response.cookies.set(SHARED_COOKIE_NAME, sharedToken, {
+      ...sharedCookieOptions,
+      maxAge: SHARED_TOKEN_TTL_SECONDS,
+    });
+
+    return response;
+  } catch (err) {
+    console.error('Login error:', err);
+    return errorRes('Internal server error', [], 500);
+  }
+}

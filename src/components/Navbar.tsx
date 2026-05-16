@@ -1,0 +1,557 @@
+"use client";
+
+import Link from "next/link";
+import Image from "next/image";
+import { useEffect, useRef, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+
+type NavLinkItem = {
+  label: string;
+  href: string;
+};
+
+type NavbarProps = {
+  user: {
+    name: string;
+    email: string;
+    role: string;
+    uid?: string;
+  } | null;
+};
+
+export default function Navbar({ user }: NavbarProps) {
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [openDesktopDropdown, setOpenDesktopDropdown] = useState<string | null>(null);
+  const [isScrolled, setIsScrolled] = useState(false);
+  const dropdownCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  useEffect(() => {
+    const onScroll = () => {
+      setIsScrolled(window.scrollY > 24);
+    };
+
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  const currentPathWithSearch = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
+  const loginHref = `/login?next=${encodeURIComponent(currentPathWithSearch)}`;
+  const bookingLoginHref = `/login?next=${encodeURIComponent("/facility-booking")}&reason=booking-auth-required`;
+  const userRole = user?.role || null;
+  const canSeeFacultyPortal = userRole === "FACULTY" || userRole === "ADMIN" || userRole === "INDUSTRY_PARTNER";
+  const canSeeAdminPanel = userRole === "ADMIN";
+  const canSeeMySubmissions = userRole === "STUDENT";
+  const canSeeIndustryInternshipPortal = userRole === "INDUSTRY_PARTNER" || userRole === "ADMIN";
+  const canSeeStudentInternshipPortal = userRole === "STUDENT";
+  const isLoggedIn = !!user;
+  const bookFacilityHref = isLoggedIn ? "/facility-booking" : bookingLoginHref;
+
+  useEffect(() => {
+    setOpenDesktopDropdown(null);
+    setIsMobileMenuOpen(false);
+    setIsUserMenuOpen(false);
+  }, [pathname, searchParams]);
+
+  useEffect(() => {
+    return () => {
+      if (dropdownCloseTimer.current) {
+        clearTimeout(dropdownCloseTimer.current);
+      }
+    };
+  }, []);
+
+  const clearDropdownCloseTimer = () => {
+    if (dropdownCloseTimer.current) {
+      clearTimeout(dropdownCloseTimer.current);
+      dropdownCloseTimer.current = null;
+    }
+  };
+
+  const openDropdown = (key: string) => {
+    clearDropdownCloseTimer();
+    setOpenDesktopDropdown(key);
+  };
+
+  const scheduleDropdownClose = () => {
+    clearDropdownCloseTimer();
+    dropdownCloseTimer.current = setTimeout(() => {
+      setOpenDesktopDropdown(null);
+      dropdownCloseTimer.current = null;
+    }, 220);
+  };
+
+  const isLinkActive = (href: string) => {
+    if (href === "/") {
+      return pathname === "/";
+    }
+    if (href.startsWith("/#")) {
+      return pathname === "/";
+    }
+    return pathname === href || pathname.startsWith(`${href}/`);
+  };
+
+  const primaryLinks: NavLinkItem[] = [
+    { label: "Home", href: "/" },
+    { label: "About", href: "/about" },
+  ];
+
+  const programsLinks: NavLinkItem[] = [
+    { label: "Innovation", href: "/innovation" },
+    { label: "Industry Internship", href: "/industry-internship" },
+    { label: "Laboratory", href: "/laboratory" },
+  ];
+
+  const spotlightLinks: NavLinkItem[] = [
+    { label: "Events", href: "/#events" },
+    { label: "Grants", href: "/#grants" },
+    { label: "News", href: "/#news" },
+  ];
+
+  const portalLinks: NavLinkItem[] = [
+    ...(canSeeFacultyPortal
+      ? [{ label: userRole === "INDUSTRY_PARTNER" ? "Industry Workspace" : "Faculty Portal", href: userRole === "INDUSTRY_PARTNER" ? "/innovation/faculty" : "/faculty" }]
+      : []),
+    ...(canSeeIndustryInternshipPortal ? [{ label: "Internship Dashboard", href: "/industry-internship/dashboard" }] : []),
+    ...(canSeeStudentInternshipPortal ? [{ label: "My Internship Dashboard", href: "/student-internship" }] : []),
+    ...(canSeeAdminPanel ? [{ label: "Admin Panel", href: "/admin" }] : []),
+  ];
+
+  const groupedDesktopMenus: Array<{ label: string; key: string; links: NavLinkItem[] }> = [
+    { label: "Programs", key: "programs", links: programsLinks },
+    { label: "Spotlight", key: "spotlight", links: spotlightLinks },
+    ...(portalLinks.length > 0 ? [{ label: "Portals", key: "portals", links: portalLinks }] : []),
+  ];
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        credentials: "include",
+      });
+    } finally {
+      window.location.href = "/login";
+    }
+  };
+
+  return (
+    <>
+      {/* TopNoticeTicker */}
+      <div
+        className={`bg-[#705e49] flex items-center px-4 md:px-6 py-2 w-full z-[60] fixed top-0 border-none font-['Inter'] text-xs font-bold uppercase tracking-wider text-white marquee-scroll cursor-pointer transition-all duration-300 ${isScrolled ? "-translate-y-full opacity-0 pointer-events-none" : "translate-y-0 opacity-100"}`}
+      >
+        <span className="whitespace-nowrap flex items-center gap-2"></span>
+        <div className="marquee-content ml-2 sm:ml-4">
+          <span>Solve real-world industry problems and gain recognition</span>
+          <span>Open Problem Statements available — Register your team now</span>
+          <span>Build your portfolio with live projects and hackathons</span>
+          <span>Explore grants, events & innovation opportunities</span>
+        </div>
+      </div>
+
+      {/* TopNavBar */}
+      <nav
+        className={`flex justify-between items-center w-full px-4 md:px-8 z-50 fixed border-none transition-all duration-300 ${isScrolled
+          ? "top-0 bg-[#001a42]/92 backdrop-blur-md py-3 shadow-[0_8px_24px_rgba(0,24,61,0.25)]"
+          : "top-[32px] sm:top-[32px] bg-[#002155] py-4 shadow-md"
+          }`}
+      >
+        {/* LEFT SIDE: CoE Logo and Brand Name */}
+        <div className="flex items-center gap-4 md:gap-5 z-50">
+          <Link
+            href="/"
+            className="shrink-0 flex items-center justify-center group"
+          >
+            <Image
+              src="/coe-logo.jpeg"
+              alt="CoE Logo"
+              width={80}
+              height={80}
+              priority // <--- This tells Next.js to preload this image
+              className="object-contain w-12 h-10 md:w-16 md:h-12 transition-transform group-hover:scale-105"
+            />
+          </Link>
+
+          <Link
+            href="/"
+            className="text-lg md:text-xl font-bold text-white tracking-tighter uppercase flex flex-col leading-tight cursor-pointer"
+          >
+            <span className="font-multiple ">TCET CENTRE OF EXCELLENCE</span>
+            <span className="text-[8px] md:text-[10px] tracking-[0.2em] font-label opacity-90 hidden sm:block">
+              For Research Culture & Development
+            </span>
+          </Link>
+        </div>
+
+        {/* RIGHT SIDE: Desktop Links + TCET Logo + Mobile Toggle */}
+        <div className="flex items-center gap-6 z-50">
+          {/* Desktop Links */}
+          <div className="hidden lg:flex items-center gap-5">
+            {primaryLinks.map((link) => (
+              <Link
+                key={link.label}
+                href={link.href}
+                className={`${isLinkActive(link.href)
+                  ? "text-[#fd9923] font-bold border-b-2 border-[#fd9923] pb-1"
+                  : "text-white opacity-80 hover:opacity-100 hover:text-[#fd9923]"
+                  } transition-all text-xs font-['Inter'] uppercase tracking-[0.05rem]`}
+              >
+                {link.label}
+              </Link>
+            ))}
+
+            {groupedDesktopMenus.map((menu) => {
+              const isMenuActive = menu.links.some((link) => isLinkActive(link.href));
+              const isOpen = openDesktopDropdown === menu.key;
+              const useActiveHighlight = menu.key !== "spotlight";
+
+              return (
+                <div
+                  key={menu.key}
+                  className="relative"
+                  onMouseEnter={() => openDropdown(menu.key)}
+                  onMouseLeave={scheduleDropdownClose}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setOpenDesktopDropdown((prev) => (prev === menu.key ? null : menu.key))}
+                    className={`${isMenuActive && useActiveHighlight
+                      ? "text-[#fd9923] font-bold"
+                      : "text-white opacity-80 hover:opacity-100 hover:text-[#fd9923]"
+                      } flex items-center gap-1 transition-all text-xs font-['Inter'] uppercase tracking-[0.05rem]`}
+                  >
+                    {menu.label}
+                    <span className={`material-symbols-outlined text-base transition-transform ${isOpen ? "rotate-180" : ""}`}>
+                      expand_more
+                    </span>
+                  </button>
+
+                  {isOpen ? (
+                    <div
+                      className="absolute left-0 top-full min-w-[220px] border border-white/20 bg-[#001a42] p-2 shadow-[0_10px_30px_rgba(0,0,0,0.3)]"
+                      onMouseEnter={() => openDropdown(menu.key)}
+                      onMouseLeave={scheduleDropdownClose}
+                    >
+                      {menu.links.map((link) => (
+                        <Link
+                          key={`${menu.key}-${link.href}`}
+                          href={link.href}
+                          onClick={() => setOpenDesktopDropdown(null)}
+                          className={`${isLinkActive(link.href)
+                            ? "bg-[#fd9923] text-[#002155]"
+                            : "text-white hover:bg-white/10"
+                            } block px-3 py-2 text-[11px] font-bold uppercase tracking-wider transition-colors`}
+                        >
+                          {link.label}
+                        </Link>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+
+            {process.env.NODE_ENV === 'development' && (
+              <span className="hidden">Debug: {user ? 'Logged In' : 'Logged Out'}</span>
+            )}
+
+            {!isLoggedIn ? (
+              <Link
+                href={loginHref}
+                className="text-white opacity-85 hover:opacity-100 hover:text-[#fd9923] transition-all text-xs font-['Inter'] uppercase tracking-[0.05rem]"
+              >
+                Login
+              </Link>
+            ) : null}
+
+            <Link
+              href={bookFacilityHref}
+              className={`${pathname === "/facility-booking"
+                ? "bg-[#f98e14]"
+                : "bg-[#f98e14] hover:bg-[#6b3b00]"
+                } px-4 py-2 text-white font-bold text-[10px] sm:text-xs font-['Inter'] uppercase tracking-[0.05rem] transition-colors`}
+            >
+              Book Facility
+            </Link>
+            {isLoggedIn ? (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setIsUserMenuOpen((prev) => !prev)}
+                  className="flex items-center gap-2 border border-white/30 px-2 py-1 text-white hover:bg-white/10"
+                >
+                  <span className="material-symbols-outlined text-lg">account_circle</span>
+                  <span className="max-w-[120px] truncate text-[10px] font-bold uppercase tracking-wider">
+                    {user?.name || "Account"}
+                  </span>
+                </button>
+                {isUserMenuOpen ? (
+                  <div className="absolute right-0 top-[110%] w-[300px] border border-[#c4c6d3] bg-white p-3 shadow-lg">
+                    <p className="text-[10px] uppercase tracking-widest text-[#747782]">Signed In</p>
+                    <p className="mt-1 text-sm font-bold text-[#002155]">{user?.name}</p>
+                    <p className="mt-1 text-xs text-[#434651]">{user?.email}</p>
+                    <p className="mt-1 text-xs text-[#434651]">Role: {user?.role}</p>
+                    {user?.uid ? <p className="mt-1 text-xs text-[#434651]">UID: {user.uid}</p> : null}
+
+                    <div className="mt-3 grid grid-cols-1 gap-2">
+                      {canSeeAdminPanel ? (
+                        <Link
+                          href="/admin?tab=innovation"
+                          onClick={() => setIsUserMenuOpen(false)}
+                          className="border border-[#0b6b2e] px-3 py-2 text-center text-[10px] font-bold uppercase tracking-wider text-[#0b6b2e] hover:bg-[#0b6b2e] hover:text-white transition-colors"
+                        >
+                          Hackathon Control Center
+                        </Link>
+                      ) : null}
+                      {canSeeMySubmissions ? (
+                        <>
+                          <Link
+                            href="/profile"
+                            onClick={() => setIsUserMenuOpen(false)}
+                            className="border border-[#002155] px-3 py-2 text-center text-[10px] font-bold uppercase tracking-wider text-[#002155] hover:bg-[#002155] hover:text-white transition-colors"
+                          >
+                            My Profile
+                          </Link>
+                          <Link
+                            href="/innovation/my-applications"
+                            onClick={() => setIsUserMenuOpen(false)}
+                            className="border border-[#fd9923] px-3 py-2 text-center text-[10px] font-bold uppercase tracking-wider text-[#fd9923] hover:bg-[#fd9923] hover:text-white transition-colors"
+                          >
+                            My Applications
+                          </Link>
+                          <Link
+                            href="/innovation/my-submissions"
+                            onClick={() => setIsUserMenuOpen(false)}
+                            className="border border-[#002155] px-3 py-2 text-center text-[10px] font-bold uppercase tracking-wider text-[#002155]"
+                          >
+                            My Submissions
+                          </Link>
+                        </>
+                      ) : null}
+                      {userRole === "INDUSTRY_PARTNER" ? (
+                        <>
+                          <Link
+                            href="/innovation/faculty"
+                            onClick={() => setIsUserMenuOpen(false)}
+                            className="border border-[#8c4f00] px-3 py-2 text-center text-[10px] font-bold uppercase tracking-wider text-[#8c4f00]"
+                          >
+                            Industry Workspace
+                          </Link>
+                          <Link
+                            href="/innovation/faculty/applications"
+                            onClick={() => setIsUserMenuOpen(false)}
+                            className="border border-[#0b6b2e] px-3 py-2 text-center text-[10px] font-bold uppercase tracking-wider text-[#0b6b2e]"
+                          >
+                            Internship Applicants
+                          </Link>
+                        </>
+                      ) : null}
+                      <Link
+                        href="/facility-booking"
+                        onClick={() => setIsUserMenuOpen(false)}
+                        className="border border-[#8c4f00] px-3 py-2 text-center text-[10px] font-bold uppercase tracking-wider text-[#8c4f00]"
+                      >
+                        My Booking Area
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={() => void handleLogout()}
+                        className="bg-[#002155] px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-white"
+                      >
+                        Logout
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+
+          {/* EXTREME RIGHT: TCET Logo */}
+          <div className="shrink-0 flex items-center justify-center ml-2 sm:ml-4">
+            <Image
+              src="/tcetlogo.png"
+              alt="TCET Logo"
+              width={64}
+              height={48}
+              priority // <--- This also preloads the TCET logo
+              className="object-contain w-12 h-10 md:w-16 md:h-12"
+            />
+          </div>
+
+          {/* Mobile Toggle Button */}
+          <button
+            className="lg:hidden text-white p-2 hover:bg-[#003580] rounded transition-colors"
+            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+          >
+            <span className="material-symbols-outlined text-2xl">
+              {isMobileMenuOpen ? "close" : "menu"}
+            </span>
+          </button>
+        </div>
+      </nav>
+      {/* Mobile Menu Overlay */}
+      <div
+        className={`fixed inset-0 bg-[#002155] z-40 lg:hidden flex flex-col pt-24 px-6 transition-transform duration-300 ease-in-out ${isMobileMenuOpen ? "translate-x-0" : "translate-x-full"
+          }`}
+      >
+        <div className="relative mb-8 w-full block md:hidden"></div>
+
+        <div className="flex flex-col gap-6 w-full h-full overflow-y-auto pb-8 custom-scrollbar">
+          {isLoggedIn ? (
+            <div className="border border-white/25 bg-white/10 p-4 text-white">
+              <p className="text-[10px] uppercase tracking-widest text-white/70">Signed In</p>
+              <p className="mt-1 text-sm font-bold">{user?.name}</p>
+              <p className="mt-1 text-xs text-white/80">{user?.email}</p>
+              <p className="mt-1 text-xs text-white/80">Role: {user?.role}</p>
+              {user?.uid ? <p className="mt-1 text-xs text-white/80">UID: {user.uid}</p> : null}
+            </div>
+          ) : null}
+
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/60">Main</p>
+            <div className="mt-2 grid grid-cols-1 gap-2">
+              {primaryLinks.map((link) => (
+                <Link
+                  key={`main-${link.href}`}
+                  href={link.href}
+                  onClick={() => setIsMobileMenuOpen(false)}
+                  className={`${isLinkActive(link.href)
+                    ? "text-[#fd9923] font-bold border-l-4 border-[#fd9923] pl-3"
+                    : "text-white opacity-80 hover:opacity-100 pl-4"
+                    } transition-all text-sm font-['Inter'] uppercase tracking-widest block`}
+                >
+                  {link.label}
+                </Link>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/60">Programs</p>
+            <div className="mt-2 grid grid-cols-1 gap-2">
+              {programsLinks.map((link) => (
+                <Link
+                  key={`program-${link.href}`}
+                  href={link.href}
+                  onClick={() => setIsMobileMenuOpen(false)}
+                  className={`${isLinkActive(link.href)
+                    ? "text-[#fd9923] font-bold border-l-4 border-[#fd9923] pl-3"
+                    : "text-white opacity-80 hover:opacity-100 pl-4"
+                    } transition-all text-sm font-['Inter'] uppercase tracking-widest block`}
+                >
+                  {link.label}
+                </Link>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/60">Spotlight</p>
+            <div className="mt-2 grid grid-cols-1 gap-2">
+              {spotlightLinks.map((link) => (
+                <Link
+                  key={`spotlight-${link.href}`}
+                  href={link.href}
+                  onClick={() => setIsMobileMenuOpen(false)}
+                  className="text-white opacity-80 hover:opacity-100 pl-4 transition-all text-sm font-['Inter'] uppercase tracking-widest block"
+                >
+                  {link.label}
+                </Link>
+              ))}
+            </div>
+          </div>
+
+          {portalLinks.length > 0 ? (
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/60">Portals</p>
+              <div className="mt-2 grid grid-cols-1 gap-2">
+                {portalLinks.map((link) => (
+                  <Link
+                    key={`portal-${link.href}`}
+                    href={link.href}
+                    onClick={() => setIsMobileMenuOpen(false)}
+                    className={`${isLinkActive(link.href)
+                      ? "text-[#fd9923] font-bold border-l-4 border-[#fd9923] pl-3"
+                      : "text-white opacity-80 hover:opacity-100 pl-4"
+                      } transition-all text-sm font-['Inter'] uppercase tracking-widest block`}
+                  >
+                    {link.label}
+                  </Link>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {!isLoggedIn ? (
+            <Link
+              href={loginHref}
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="inline-block w-full border border-white/40 py-3 text-center text-xs font-bold uppercase tracking-wider text-white"
+            >
+              Login
+            </Link>
+          ) : null}
+
+          <div className="mt-4 pt-4 border-t border-white/20">
+            <Link
+              href={bookFacilityHref}
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="inline-block w-full text-center bg-[#fd9923] hover:bg-[#8c4f00] py-4 text-[#002155] hover:text-white font-bold text-sm font-['Inter'] uppercase tracking-widest transition-colors"
+            >
+              Book Facility Form
+            </Link>
+            {isLoggedIn ? (
+              <>
+                {canSeeAdminPanel ? (
+                  <Link
+                    href="/admin?tab=innovation"
+                    onClick={() => setIsMobileMenuOpen(false)}
+                    className="mt-3 inline-block w-full border border-[#0b6b2e] py-3 text-center text-xs font-bold uppercase tracking-wider text-[#0b6b2e] hover:bg-[#0b6b2e] hover:text-white transition-colors"
+                  >
+                    Hackathon Control Center
+                  </Link>
+                ) : null}
+                {canSeeMySubmissions ? (
+                  <>
+                    <Link
+                      href="/profile"
+                      onClick={() => setIsMobileMenuOpen(false)}
+                      className="mt-3 inline-block w-full border border-[#002155] py-3 text-center text-xs font-bold uppercase tracking-wider text-[#002155] hover:bg-[#002155] hover:text-white transition-colors"
+                    >
+                      My Profile
+                    </Link>
+                    <Link
+                      href="/innovation/my-applications"
+                      onClick={() => setIsMobileMenuOpen(false)}
+                      className="mt-3 inline-block w-full border border-[#fd9923] py-3 text-center text-xs font-bold uppercase tracking-wider text-[#fd9923] hover:bg-[#fd9923] hover:text-white transition-colors"
+                    >
+                      My Applications
+                    </Link>
+                    <Link
+                      href="/innovation/my-submissions"
+                      onClick={() => setIsMobileMenuOpen(false)}
+                      className="mt-3 inline-block w-full border border-white/40 py-3 text-center text-xs font-bold uppercase tracking-wider text-white"
+                    >
+                      My Submissions
+                    </Link>
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => void handleLogout()}
+                  className="mt-3 inline-block w-full bg-[#0b2f66] py-3 text-center text-xs font-bold uppercase tracking-wider text-white"
+                >
+                  Logout
+                </button>
+              </>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}

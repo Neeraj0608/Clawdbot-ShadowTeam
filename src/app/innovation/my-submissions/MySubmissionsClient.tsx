@@ -1,0 +1,283 @@
+"use client";
+
+import Link from 'next/link';
+import { useEffect, useState } from 'react';
+import { usePathname } from "next/navigation";
+
+type ApiEnvelope<T> = {
+  success: boolean;
+  message: string;
+  data: T;
+};
+
+type ClaimRow = {
+  id: number;
+  submissionType: 'OPEN' | 'HACKATHON';
+  teamName: string | null;
+  status: string;
+  submissionUrl: string | null;
+  submissionFileUrl: string | null;
+  technicalDocumentUrl: string | null;
+  pptFileUrl: string | null;
+  score: number | null;
+  feedback: string | null;
+  badges: string | null;
+  resultVisible?: boolean;
+  resultPublishedAt?: string | null;
+  updatedAt: string;
+  problem: {
+    id: number;
+    title: string;
+    mode: string;
+    status: string;
+    event: { id: number; title: string; status: string } | null;
+  };
+};
+
+type ApplicationRow = {
+  id: number;
+  status: 'SUBMITTED' | 'SELECTED' | 'REJECTED';
+  feedback: string | null;
+  createdAt: string;
+  updatedAt: string;
+  problem: {
+    id: number;
+    title: string;
+    problemType: 'OPEN' | 'INTERNSHIP';
+    mode: 'OPEN' | 'CLOSED';
+    status: 'OPENED' | 'CLOSED' | 'ARCHIVED';
+    approvalStatus: 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED';
+    industryName: string | null;
+  };
+};
+
+async function fetchClaims(): Promise<ClaimRow[]> {
+  const res = await fetch('/api/innovation/claims/my', {
+    credentials: 'include',
+  });
+
+  const payload = (await res.json()) as ApiEnvelope<ClaimRow[]>;
+  if (!res.ok || !payload.success) throw new Error(payload.message || 'Failed to fetch claims');
+  return payload.data;
+}
+
+async function fetchApplications(): Promise<ApplicationRow[]> {
+  const res = await fetch('/api/innovation/applications/my', {
+    credentials: 'include',
+  });
+
+  const payload = (await res.json()) as ApiEnvelope<ApplicationRow[]>;
+  if (!res.ok || !payload.success) throw new Error(payload.message || 'Failed to fetch applications');
+  return payload.data;
+}
+
+const isArchivedInternship = (application: ApplicationRow) => {
+  return (
+    application.problem.status !== 'OPENED' ||
+    application.problem.mode !== 'OPEN' ||
+    application.problem.approvalStatus !== 'APPROVED'
+  );
+};
+
+export default function MySubmissionsClient() {
+  const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [claims, setClaims] = useState<ClaimRow[]>([]);
+  const [applications, setApplications] = useState<ApplicationRow[]>([]);
+  const pathname = usePathname();
+
+  useEffect(() => {
+    const run = async () => {
+      try {
+        const [claimData, applicationData] = await Promise.all([fetchClaims(), fetchApplications()]);
+        setClaims(claimData);
+        setApplications(applicationData);
+      } catch (err) {
+        setErrorMessage(err instanceof Error ? err.message : 'Could not load submissions');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    void run();
+  }, []);
+
+  const openSubmissions = claims.filter((claim) => claim.submissionType === 'OPEN');
+  const hackathonSubmissions = claims.filter((claim) => claim.submissionType === 'HACKATHON');
+  const internshipApplications = applications
+    .filter((application) => application.problem.problemType === 'INTERNSHIP')
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+  const renderInternshipCard = (application: ApplicationRow) => {
+    const archived = isArchivedInternship(application);
+
+    return (
+      <article key={`internship-${application.id}`} className="border border-[#c4c6d3] bg-white p-5">
+        <p className="text-xs uppercase tracking-widest text-[#8c4f00]">
+          INTERNSHIP • {application.status}{archived ? ' • ARCHIVED' : ''}
+        </p>
+        <h2 className="mt-1 text-lg font-bold text-[#002155]">{application.problem.title}</h2>
+        <p className="mt-2 text-sm text-[#434651]">
+          Company: {application.problem.industryName || 'Industry partner'}
+        </p>
+        <p className="mt-1 text-xs text-[#434651]">
+          Lifecycle: {application.problem.status} • Approval: {application.problem.approvalStatus.replaceAll('_', ' ')}
+        </p>
+        <p className="mt-1 text-xs text-[#434651]">Last update: {new Date(application.updatedAt).toLocaleString()}</p>
+
+        {archived ? (
+          <p className="mt-2 inline-flex border border-[#8c4f00] bg-[#fff8ee] px-2 py-1 text-[11px] font-bold uppercase tracking-wider text-[#8c4f00]">
+            Archived Submission
+          </p>
+        ) : null}
+
+        {application.feedback ? (
+          <div className="mt-3 border border-[#e3e2df] bg-[#faf9f5] p-3">
+            <p className="text-xs uppercase tracking-widest text-[#434651] font-bold">Reviewer Feedback</p>
+            <p className="mt-1 text-sm text-[#434651]">{application.feedback}</p>
+          </div>
+        ) : null}
+      </article>
+    );
+  };
+
+  const renderSubmissionCard = (claim: ClaimRow) => (
+    <article key={`${claim.submissionType}-${claim.id}`} className="border border-[#c4c6d3] bg-white p-5">
+      <p className="text-xs uppercase tracking-widest text-[#8c4f00]">{claim.submissionType} • {claim.status}</p>
+      <h2 className="mt-1 text-lg font-bold text-[#002155]">{claim.problem.title}</h2>
+      <p className="mt-2 text-sm text-[#434651]">Team: {claim.teamName || 'Individual'}</p>
+      <p className="mt-1 text-xs text-[#434651]">Score: {claim.score ?? 'Pending'}</p>
+      <p className="mt-1 text-xs text-[#434651]">Badges: {claim.badges || 'None'}</p>
+      <p className="mt-1 text-xs text-[#434651]">Last update: {new Date(claim.updatedAt).toLocaleString()}</p>
+      {claim.problem.event ? <p className="mt-1 text-xs text-[#434651]">Event: {claim.problem.event.title}</p> : null}
+      {claim.submissionType === 'OPEN' && !claim.resultVisible ? (
+        <p className="mt-1 text-xs font-bold text-[#8c4f00]">Result is locked until the statement is closed by faculty.</p>
+      ) : null}
+      {claim.submissionType === 'OPEN' && claim.resultVisible && claim.resultPublishedAt ? (
+        <p className="mt-1 text-xs text-[#434651]">Result published: {new Date(claim.resultPublishedAt).toLocaleString()}</p>
+      ) : null}
+
+      {claim.problem.event ? (
+        <Link
+          href={`/innovation/events/${claim.problem.event.id}`}
+          className="inline-flex mt-3 border border-[#002155] text-[#002155] px-3 py-2 text-xs font-bold uppercase tracking-wider"
+        >
+          View Event Page
+        </Link>
+      ) : null}
+
+      <div className="mt-3 flex flex-wrap gap-3">
+        {claim.submissionUrl ? (
+          <a href={claim.submissionUrl} target="_blank" rel="noreferrer" className="text-xs font-bold uppercase tracking-wider text-[#8c4f00] underline">
+            Open Submission URL
+          </a>
+        ) : null}
+        {claim.submissionFileUrl ? (
+          <a href={claim.submissionFileUrl} target="_blank" rel="noreferrer" className="text-xs font-bold uppercase tracking-wider text-[#8c4f00] underline">
+            Open Uploaded File
+          </a>
+        ) : null}
+        {claim.technicalDocumentUrl ? (
+          <a href={claim.technicalDocumentUrl} target="_blank" rel="noreferrer" className="text-xs font-bold uppercase tracking-wider text-[#8c4f00] underline">
+            Open Technical Document
+          </a>
+        ) : null}
+        {claim.pptFileUrl ? (
+          <a href={claim.pptFileUrl} target="_blank" rel="noreferrer" className="text-xs font-bold uppercase tracking-wider text-[#8c4f00] underline">
+            Open PPT
+          </a>
+        ) : null}
+      </div>
+
+      {claim.feedback ? (
+        <div className="mt-3 border border-[#e3e2df] bg-[#faf9f5] p-3">
+          <p className="text-xs uppercase tracking-widest text-[#434651] font-bold">Faculty Feedback</p>
+          <p className="mt-1 text-sm text-[#434651]">{claim.feedback}</p>
+        </div>
+      ) : null}
+    </article>
+  );
+
+  return (
+    <main className="max-w-7xl mx-auto mt-10 px-4 md:px-8 pt-[120px] pb-14 min-h-screen">
+      <header className="mb-8 border-l-4 border-[#002155] pl-4 md:pl-6">
+        <h1 className="font-headline text-3xl md:text-[40px] font-bold tracking-tight text-[#002155] leading-none">
+          My Innovation Submissions
+        </h1>
+        <p className="mt-2 text-[#434651] max-w-3xl font-body">
+          Track your claim status, uploaded links/files, scores, and faculty feedback.
+        </p>
+      </header>
+
+      <section className="mb-6 flex flex-wrap gap-3">
+        <Link
+          href="/innovation"
+          className={`px-4 py-2 text-xs font-bold uppercase tracking-wider ${pathname === "/innovation"
+              ? "bg-[#002155] text-white"
+              : "border border-[#002155] text-[#002155]"
+            }`}
+        >
+          Innovation Home
+        </Link>
+
+        <Link
+          href="/innovation/problems"
+          className={`px-4 py-2 text-xs font-bold uppercase tracking-wider ${pathname === "/innovation/problems"
+              ? "bg-[#0b6b2e] text-white"
+              : "border border-[#0b6b2e] text-[#0b6b2e]"
+            }`}
+        >
+          Open Problem Statements
+        </Link>
+
+        <Link
+          href="/innovation/my-submissions"
+          className={`px-4 py-2 text-xs font-bold uppercase tracking-wider ${pathname === "/innovation/my-submissions"
+              ? "bg-[#002155] text-white"
+              : "border border-[#002155] text-[#002155]"
+            }`}
+        >
+          My Submissions
+        </Link>
+      </section>
+
+      {loading ? <p className="text-sm text-[#434651]">Loading your submissions...</p> : null}
+      {errorMessage ? <p className="mb-4 border border-red-300 bg-red-50 text-red-700 px-4 py-3 text-sm">{errorMessage}</p> : null}
+
+      {!loading && !errorMessage ? (
+        claims.length === 0 && applications.length === 0 ? (
+          <p className="border border-dashed border-[#c4c6d3] bg-white p-6 text-[#434651]">No claims found for your account.</p>
+        ) : (
+          <div className="space-y-6">
+            <section>
+              <h2 className="font-headline text-2xl text-[#002155] mb-3">Internship Submissions</h2>
+              {internshipApplications.length === 0 ? (
+                <p className="border border-dashed border-[#c4c6d3] bg-white p-4 text-[#434651] text-sm">No internship submissions yet.</p>
+              ) : (
+                <div className="space-y-4">{internshipApplications.map((application) => renderInternshipCard(application))}</div>
+              )}
+            </section>
+
+            <section>
+              <h2 className="font-headline text-2xl text-[#002155] mb-3">Open Statement Submissions</h2>
+              {openSubmissions.length === 0 ? (
+                <p className="border border-dashed border-[#c4c6d3] bg-white p-4 text-[#434651] text-sm">No open statement submissions yet.</p>
+              ) : (
+                <div className="space-y-4">{openSubmissions.map((claim) => renderSubmissionCard(claim))}</div>
+              )}
+            </section>
+
+            <section>
+              <h2 className="font-headline text-2xl text-[#002155] mb-3">Hackathon Submissions</h2>
+              {hackathonSubmissions.length === 0 ? (
+                <p className="border border-dashed border-[#c4c6d3] bg-white p-4 text-[#434651] text-sm">No hackathon submissions yet.</p>
+              ) : (
+                <div className="space-y-4">{hackathonSubmissions.map((claim) => renderSubmissionCard(claim))}</div>
+              )}
+            </section>
+          </div>
+        )
+      ) : null}
+    </main>
+  );
+}

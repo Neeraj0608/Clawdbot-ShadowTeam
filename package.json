@@ -1,0 +1,51 @@
+{
+  "name": "facility-booking-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "db:migrate:status": "node scripts/prisma-safe-migrate.mjs status",
+    "db:migrate:create": "node scripts/prisma-safe-migrate.mjs create",
+    "db:migrate:apply": "node scripts/prisma-safe-migrate.mjs apply",
+    "db:migrate": "node scripts/prisma-safe-migrate.mjs apply",
+    "db:generate": "prisma generate"
+  },
+  "dependencies": {
+    "@next/third-parties": "^16.2.1",
+    "@prisma/client": "^5.22.0",
+    "bcryptjs": "^3.0.3",
+    "express-rate-limit": "^8.3.1",
+    "jsonwebtoken": "^9.0.3",
+    "jsqr": "^1.4.0",
+    "minio": "^8.0.7",
+    "next": "16.2.1",
+    "node-cron": "^4.2.1",
+    "nodemailer": "^8.0.4",
+    "pdf-lib": "^1.17.1",
+    "prisma": "^5.22.0",
+    "qrcode": "^1.5.4",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "uuid": "^13.0.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^20",
+    "@types/node-cron": "^3.0.11",
+    "@types/nodemailer": "^7.0.11",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/uuid": "^10.0.0",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.1",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
